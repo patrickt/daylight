@@ -10,6 +10,7 @@ capnp = { version = "0.23.0", features = ["quickcheck"] }
 capnp-futures = "0.23.0"
 capnp-rpc = "0.23.0"
 futures = "0.3"
+rayon = "1.11.0"
 tokio = { version = "1", features = ["net", "rt", "macros"]}
 tokio-util = { version = "0.7", features = ["compat"] }
 

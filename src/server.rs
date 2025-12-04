@@ -6,7 +6,16 @@ use std::rc::Rc;
 
 use crate::daylight_capnp::html_highlighter;
 
-struct Daylight {}
+struct Daylight {
+    pool: rayon::ThreadPool,
+}
+
+impl Daylight {
+    fn new() -> Result<Self, rayon::ThreadPoolBuildError> {
+        let pool = rayon::ThreadPoolBuilder::new().num_threads(8).build()?;
+        Ok(Daylight{pool})
+    }
+}
 
 impl html_highlighter::Server for Daylight {
     async fn html(
@@ -14,7 +23,9 @@ impl html_highlighter::Server for Daylight {
         _params: html_highlighter::HtmlParams,
         _results: html_highlighter::HtmlResults,
     ) -> Result<(), capnp::Error> {
-        Ok(())
+        self.pool.install(|| {
+            Ok(())
+        })
     }
 }
 
@@ -33,7 +44,7 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::task::LocalSet::new()
         .run_until(async move {
             let listener = tokio::net::TcpListener::bind(&addr).await?;
-            let daylight = Daylight{};
+            let daylight = Daylight::new()?;
             let daylight_client: html_highlighter::Client = capnp_rpc::new_client(daylight);
 
             loop {
