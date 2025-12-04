@@ -1,0 +1,12 @@
+[package]
+name = "daylight"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+capnp = { version = "0.23.0", features = ["quickcheck", "rpc_try"] }
+capnp-futures = "0.23.0"
+capnp-rpc = "0.23.0"
+
+[dev-dependencies]
+capnpc = "0.23.2"
