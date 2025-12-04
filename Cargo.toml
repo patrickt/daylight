@@ -3,10 +3,15 @@ name = "daylight"
 version = "0.1.0"
 edition = "2024"
 
+build = "build.rs"
+
 [dependencies]
-capnp = { version = "0.23.0", features = ["quickcheck", "rpc_try"] }
+capnp = { version = "0.23.0", features = ["quickcheck"] }
 capnp-futures = "0.23.0"
 capnp-rpc = "0.23.0"
+futures = "0.3"
+tokio = { version = "1", features = ["net", "rt", "macros"]}
+tokio-util = { version = "0.7", features = ["compat"] }
 
-[dev-dependencies]
+[build-dependencies]
 capnpc = "0.23.2"
