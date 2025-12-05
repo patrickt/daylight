@@ -27,11 +27,6 @@ enum Language {
   # Community contributions go here
 }
 
-enum Encoding {
-  utf8 @0;
-  utf16 @1;
-}
-
 enum ErrorCode {
   unspecified @0;
   timedOut @1;
@@ -44,8 +39,7 @@ struct File {
   filename @1 :Text;
   language @2 :Language;
   contents @3 :Data;
-  encoding @4 :Encoding;
-  options  @5 :List(Text);
+  options  @4 :List(Text);
 }
 
 struct Request {

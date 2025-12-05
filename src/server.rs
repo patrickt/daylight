@@ -20,15 +20,6 @@ pub struct AppState {
     pool: Arc<rayon::ThreadPool>,
 }
 
-impl AppState {
-    pub fn new() -> Result<Self, rayon::ThreadPoolBuildError> {
-        let pool = rayon::ThreadPoolBuilder::new().num_threads(8).build()?;
-        Ok(AppState {
-            pool: Arc::new(pool),
-        })
-    }
-}
-
 #[derive(Default)]
 struct PerThread {
     highlighter: ts::Highlighter,
@@ -43,18 +34,6 @@ thread_local! {
 enum HighlightError {
     #[error("highlighting failed: {0}")]
     TreeSitter(#[from] tree_sitter_highlight::Error),
-}
-
-impl HighlightError {
-    fn as_code(&self) -> daylight_capnp::ErrorCode {
-        match self {
-            Self::TreeSitter(tserr) => match tserr {
-                ts::Error::Cancelled => daylight_capnp::ErrorCode::Cancelled,
-                ts::Error::InvalidLanguage => daylight_capnp::ErrorCode::UnknownLanguage,
-                ts::Error::Unknown => daylight_capnp::ErrorCode::Unspecified,
-            }
-        }
-    }
 }
 
 struct FileJob {
@@ -75,6 +54,27 @@ struct DocumentResult {
 struct FailureResult {
     ident: u16,
     reason: HighlightError,
+}
+
+impl AppState {
+    pub fn new() -> Result<Self, rayon::ThreadPoolBuildError> {
+        let pool = rayon::ThreadPoolBuilder::new().num_threads(8).build()?;
+        Ok(AppState {
+            pool: Arc::new(pool),
+        })
+    }
+}
+
+impl HighlightError {
+    fn as_code(&self) -> daylight_capnp::ErrorCode {
+        match self {
+            Self::TreeSitter(tserr) => match tserr {
+                ts::Error::Cancelled => daylight_capnp::ErrorCode::Cancelled,
+                ts::Error::InvalidLanguage => daylight_capnp::ErrorCode::UnknownLanguage,
+                ts::Error::Unknown => daylight_capnp::ErrorCode::Unspecified,
+            }
+        }
+    }
 }
 
 fn callback(_highlight: ts::Highlight, _span: &mut Vec<u8>) {}
