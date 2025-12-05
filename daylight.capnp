@@ -1,8 +1,8 @@
 @0xa960fc22a4939250;
 
 enum Language {
-  # Core tree-sitter libraries (projects hosted under tree-sitter org)
   unspecified @0;
+  # Core tree-sitter libraries (projects hosted under tree-sitter org)
   agda @1;
   bash @2;
   c @3;
@@ -38,9 +38,9 @@ interface HtmlHighlighter {
   struct File {
     ident @0 :UInt16;
     filename @1 :Text;
-    language @2 :Language;
-    contents @3 :Data;
-    options  @4 :List(Text);
+    contents @2 :Data;
+    options  @3 :List(Text);
+    language @4 :Language;
   }
 
   struct Request {

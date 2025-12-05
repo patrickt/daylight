@@ -3,7 +3,8 @@ use capnp_rpc::{rpc_twoparty_capnp, twoparty, RpcSystem};
 use futures::AsyncReadExt;
 use rayon::prelude::*;
 use std::cell::RefCell;
-use std::net::ToSocketAddrs;
+use std::net::SocketAddr;
+use std::path::Path;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -12,11 +13,12 @@ use std::time::Duration;
 use thiserror::Error;
 use tree_sitter_highlight as ts;
 
-use crate::{daylight_capnp, languages as lang};
 use crate::daylight_capnp::html_highlighter as html;
+use crate::{daylight_capnp, languages as lang};
 
 struct Daylight {
     pool: rayon::ThreadPool,
+    per_file_timeout: Duration,
 }
 
 #[derive(Default)]
@@ -30,16 +32,18 @@ thread_local! {
 }
 
 impl Daylight {
-    fn new() -> Result<Self, rayon::ThreadPoolBuildError> {
-        let pool = rayon::ThreadPoolBuilder::new().num_threads(8).build()?;
-        Ok(Daylight{pool})
+    fn new(num_threads: usize, per_file_timeout: Duration) -> Result<Self, rayon::ThreadPoolBuildError> {
+        let pool = rayon::ThreadPoolBuilder::new().num_threads(num_threads).build()?;
+        Ok(Daylight { pool, per_file_timeout })
     }
 }
 
 #[derive(Error, Debug)]
 enum HighlightError {
     #[error("highlighting failed: {0}")]
-    TreeSitter(#[from] tree_sitter_highlight::Error)
+    TreeSitter(#[from] tree_sitter_highlight::Error),
+    #[error("unknown language")]
+    UnknownLanguage,
 }
 
 impl HighlightError {
@@ -49,8 +53,15 @@ impl HighlightError {
                 ts::Error::Cancelled => daylight_capnp::ErrorCode::Cancelled,
                 ts::Error::InvalidLanguage => daylight_capnp::ErrorCode::UnknownLanguage,
                 ts::Error::Unknown => daylight_capnp::ErrorCode::Unspecified,
-            }
+            },
+            Self::UnknownLanguage => daylight_capnp::ErrorCode::UnknownLanguage,
         }
+    }
+}
+
+impl From<HighlightError> for capnp::Error {
+    fn from(err: HighlightError) -> Self {
+        capnp::Error::failed(err.to_string())
     }
 }
 
@@ -74,45 +85,44 @@ struct FailureResult {
     reason: HighlightError,
 }
 
-fn callback(_highlight: ts::Highlight, _span: &mut Vec<u8>) {
-}
+fn callback(_highlight: ts::Highlight, _span: &mut Vec<u8>) {}
 
 fn parse(job: FileJob) -> Result<DocumentResult, FailureResult> {
-    RESOURCES.with_borrow_mut(|pt| {
-        let cancellation_flag = Arc::new(AtomicUsize::new(0));
+    RESOURCES
+        .with_borrow_mut(|pt| {
+            let cancellation_flag = Arc::new(AtomicUsize::new(0));
 
-        // Spawn a task that will set the cancellation flag after timeout
-        if !job.timeout.is_zero() {
-            let flag_clone = cancellation_flag.clone();
-            let timeout = job.timeout;
-            rayon::spawn(move || {
-                std::thread::sleep(timeout);
-                flag_clone.store(1, Ordering::Relaxed);
-            });
-        }
+            // Spawn a task that will set the cancellation flag after timeout
+            if !job.timeout.is_zero() {
+                let flag_clone = cancellation_flag.clone();
+                let timeout = job.timeout;
+                rayon::spawn(move || {
+                    std::thread::sleep(timeout);
+                    flag_clone.store(1, Ordering::Relaxed);
+                });
+            }
 
-        let iter = pt.highlighter.highlight(
-            &job.language.ts_config,
-            &job.contents,
-            Some(&cancellation_flag),
-            |_| None,
-        )?;
+            let iter = pt.highlighter.highlight(
+                &job.language.ts_config,
+                &job.contents,
+                Some(&cancellation_flag),
+                |_| None,
+            )?;
 
-        pt.renderer.reset();
-        pt.renderer.render(iter, &job.contents, &callback)?;
+            pt.renderer.reset();
+            pt.renderer.render(iter, &job.contents, &callback)?;
 
-        Ok(DocumentResult {
-            ident: job.ident,
-            filename: job.filename,
-            language: job.language.capnp_language,
-            lines: pt.renderer.lines().map(String::from).collect(),
+            Ok(DocumentResult {
+                ident: job.ident,
+                filename: job.filename,
+                language: job.language.capnp_language,
+                lines: pt.renderer.lines().map(String::from).collect(),
+            })
         })
-    }).map_err(|err| {
-        FailureResult {
+        .map_err(|err| FailureResult {
             ident: job.ident,
             reason: HighlightError::TreeSitter(err),
-        }
-    })
+        })
 }
 
 impl html::Server for Daylight {
@@ -123,14 +133,30 @@ impl html::Server for Daylight {
     ) -> Result<(), capnp::Error> {
         let request = params.get()?.get_request()?;
         let files = request.get_files()?;
-        let timeout = Duration::from_millis(request.get_timeout_ms());
+        let timeout_ms = request.get_timeout_ms();
+        let timeout = if timeout_ms == 0 {
+            self.per_file_timeout
+        } else {
+            Duration::from_millis(timeout_ms)
+        };
 
-        let jobs: Result<Vec<FileJob>, capnp::Error> = files.iter()
+        let jobs: Result<Vec<FileJob>, capnp::Error> = files
+            .iter()
             .map(|file| {
+                let filename = file.get_filename()?.to_string()?;
+
+                // Try to get language from request, otherwise infer from filename
+                let language = match file.get_language()? {
+                    daylight_capnp::Language::Unspecified => lang::from_path(Path::new(&filename))
+                        .ok_or(HighlightError::UnknownLanguage)?,
+
+                    lang => lang.try_into()?,
+                };
+
                 Ok(FileJob {
                     ident: file.get_ident(),
-                    filename: file.get_filename()?.to_string()?,
-                    language: file.get_language()?.try_into()?,
+                    filename,
+                    language,
                     contents: file.get_contents()?.to_vec(),
                     timeout,
                 })
@@ -138,8 +164,9 @@ impl html::Server for Daylight {
             .collect();
         let jobs = jobs?;
 
-        let (failure_results, doc_results): (Vec<FailureResult>, Vec<DocumentResult>) =
-            self.pool.install(|| jobs.into_par_iter().partition_map(|x| parse(x).into()));
+        let (failure_results, doc_results): (Vec<FailureResult>, Vec<DocumentResult>) = self
+            .pool
+            .install(|| jobs.into_par_iter().partition_map(|x| parse(x).into()));
 
         let mut response = results.get().init_response();
         {
@@ -157,7 +184,9 @@ impl html::Server for Daylight {
         }
 
         {
-            let mut failures = response.reborrow().init_failures(failure_results.len() as u32);
+            let mut failures = response
+                .reborrow()
+                .init_failures(failure_results.len() as u32);
             for (i, failure_result) in failure_results.iter().enumerate() {
                 let mut failure = failures.reborrow().get(i as u32);
                 failure.set_ident(failure_result.ident);
@@ -167,25 +196,13 @@ impl html::Server for Daylight {
 
         Ok(())
     }
-
 }
 
-pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() != 3 {
-        println!("usage: {} server ADDRESS[:PORT]", args[0]);
-        return Ok(());
-    }
-
-    let addr = args[2]
-        .to_socket_addrs()?
-        .next()
-        .expect("could not parse address");
-
+pub async fn main(num_threads: usize, default_timeout: Duration, addr: SocketAddr) -> anyhow::Result<()> {
     tokio::task::LocalSet::new()
         .run_until(async move {
-            let listener = tokio::net::TcpListener::bind(&addr).await?;
-            let daylight = Daylight::new()?;
+            let listener = tokio::net::TcpListener::bind(addr).await?;
+            let daylight = Daylight::new(num_threads, default_timeout)?;
             let daylight_client: html::Client = capnp_rpc::new_client(daylight);
 
             loop {
