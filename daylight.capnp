@@ -39,33 +39,33 @@ enum ErrorCode {
   unknownLanguage @3;
 }
 
-interface HtmlHighlighter {
-  struct File {
-    ident @0 :UInt16;
-    filename @1 :Text;
-    language @2 :Language;
-    contents @3 :Data;
-    encoding @4 :Encoding;
-    options  @5 :List(Text);
-  }
-  struct Request {
-    files @0 :List(File);
-    timeoutMs @1 :UInt64;
-  }
-  struct Document {
-    ident @0 :UInt16;
-    filename @1 :Text;
-    language @2 :Language;
-    lines @3 :List(Text);
-  }
-  struct Failure {
-    ident @0 :UInt16;
-    reason @1 :ErrorCode;
-  }
-  struct Response {
-    documents @0 :List(Document);
-    failures @1 :List(Failure);
-  }
+struct File {
+  ident @0 :UInt16;
+  filename @1 :Text;
+  language @2 :Language;
+  contents @3 :Data;
+  encoding @4 :Encoding;
+  options  @5 :List(Text);
+}
 
-  html @0 (request: Request) -> (response: Response);
+struct Request {
+  files @0 :List(File);
+  timeoutMs @1 :UInt64;
+}
+
+struct Document {
+  ident @0 :UInt16;
+  filename @1 :Text;
+  language @2 :Language;
+  lines @3 :List(Text);
+}
+
+struct Failure {
+  ident @0 :UInt16;
+  reason @1 :ErrorCode;
+}
+
+struct Response {
+  documents @0 :List(Document);
+  failures @1 :List(Failure);
 }
