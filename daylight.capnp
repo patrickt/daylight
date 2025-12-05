@@ -34,32 +34,36 @@ enum ErrorCode {
   unknownLanguage @3;
 }
 
-struct File {
-  ident @0 :UInt16;
-  filename @1 :Text;
-  language @2 :Language;
-  contents @3 :Data;
-  options  @4 :List(Text);
-}
+interface HtmlHighlighter {
+  struct File {
+    ident @0 :UInt16;
+    filename @1 :Text;
+    language @2 :Language;
+    contents @3 :Data;
+    options  @4 :List(Text);
+  }
 
-struct Request {
-  files @0 :List(File);
-  timeoutMs @1 :UInt64;
-}
+  struct Request {
+    files @0 :List(File);
+    timeoutMs @1 :UInt64;
+  }
 
-struct Document {
-  ident @0 :UInt16;
-  filename @1 :Text;
-  language @2 :Language;
-  lines @3 :List(Text);
-}
+  struct Document {
+    ident @0 :UInt16;
+    filename @1 :Text;
+    language @2 :Language;
+    lines @3 :List(Text);
+  }
 
-struct Failure {
-  ident @0 :UInt16;
-  reason @1 :ErrorCode;
-}
+  struct Failure {
+    ident @0 :UInt16;
+    reason @1 :ErrorCode;
+  }
 
-struct Response {
-  documents @0 :List(Document);
-  failures @1 :List(Failure);
+  struct Response {
+    documents @0 :List(Document);
+    failures @1 :List(Failure);
+  }
+
+  html @0 (request: Request) -> (response: Response);
 }
