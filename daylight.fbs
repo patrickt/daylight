@@ -1,6 +1,6 @@
-namespace daylight.html;
+namespace daylight.common;
 
-enum Language : byte {
+enum Language : uint16 {
   Unspecified = 0,
   Agda = 1,
   Bash = 2,
@@ -14,34 +14,60 @@ enum ErrorCode : byte {
   UnknownLanguage = 3,
 }
 
+namespace daylight.html;
+
+/// A file to be highlighted.
 table File {
+  /// A unique numeric identifier used to correlate files in a request with files in a response.
+  /// Often this will be an array index. If two files are passed with the same ident, the behavior
+  /// is undefined. Invariant: for each file in a request, there will be either a Document or a Failure
+  /// with that ident.
   ident: uint16;
+  /// An optional filename for this file.
   filename: string;
-  contents: [ubyte];  // Zero-copy byte array
+  /// The contents of this file.
+  contents: [ubyte];
+  /// The language for this to use. If this is unspecified, the server will make an attempt to
+  /// infer the language based on its filename. If that is unsuccessful, the file is considered
+  /// bad and a Failure will be returned.
+  language: daylight.common.Language;
+  /// Not currently used.
   options: [string];
-  language: Language;
 }
 
+/// A request to highlight some files as HTML.
 table Request {
   files: [File];
+  /// The maximum time a file is allowed to take. If zero or not provided, the server may choose a timeout.
+  /// Passing a size larger than the server's supported per-file timeout produces a `400 Bad Request`.
   timeout_ms: uint64;
 }
 
-table Document {
-  ident: uint16;
-  filename: string;
-  language: Language;
-  lines: [string];
-}
-
-table Failure {
-  ident: uint16;
-  reason: ErrorCode;
-}
-
+/// A response containing either highlighted documents or failures.
+/// Both documents and failures can appear in any order, regardless of how they were ordered in the request.
+/// Use their .ident properties to build a mapping between request and response.
+/// Invariant: len(documents) + len(failures) = len(request.files) iff no idents are duplicated.
 table Response {
   documents: [Document];
   failures: [Failure];
 }
 
-root_type Request;
+/// A successfully highlighted document.
+table Document {
+  /// The ident corresponding to the File that produced this highlighted document.
+  ident: uint16;
+  /// The file name, provided as a convenience.
+  filename: string;
+  /// The language that was used or inferred for this file.
+  language: daylight.common.Language;
+  /// Lines of HTML.
+  lines: [string];
+}
+
+/// A document that failed to highlight.
+table Failure {
+  /// The ident corresponding to the File that produced this highlighted failure.
+  ident: uint16;
+  /// An error code describing the nature of this failure.
+  reason: daylight.common.ErrorCode;
+}

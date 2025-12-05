@@ -17,8 +17,9 @@ use std::time::Duration;
 use thiserror::Error;
 use tree_sitter_highlight as ts;
 
+use crate::daylight_generated::daylight::common::{ErrorCode, Language};
 use crate::daylight_generated::daylight::html::{
-    Document, DocumentArgs, ErrorCode, Failure, FailureArgs, Language,
+    Document, DocumentArgs, Failure, FailureArgs,
     Request, Response as FbResponse, ResponseArgs,
 };
 use crate::languages as lang;
@@ -26,17 +27,18 @@ use crate::languages as lang;
 #[derive(Clone)]
 struct AppState {
     pool: Arc<rayon::ThreadPool>,
-    per_file_timeout: Duration,
+    /// TODO: someday provide both default and max settings for timeout_ms, and reject timeouts that are too large.
+    default_per_file_timeout: Duration,
 }
 
 #[derive(Default)]
-struct PerThread {
+struct ThreadState {
     highlighter: ts::Highlighter,
     renderer: ts::HtmlRenderer,
 }
 
 thread_local! {
-    pub static RESOURCES: RefCell<PerThread> = RefCell::default();
+    pub static PER_THREAD: RefCell<ThreadState> = RefCell::default();
 }
 
 #[derive(Error, Debug)]
@@ -45,6 +47,10 @@ enum HighlightError {
     TreeSitter(#[from] tree_sitter_highlight::Error),
     #[error("unknown language")]
     UnknownLanguage,
+    #[error("invalid request: {0}")]
+    InvalidRequest(String),
+    #[error("internal error: {0}")]
+    Internal(String),
 }
 
 impl HighlightError {
@@ -56,6 +62,7 @@ impl HighlightError {
                 ts::Error::Unknown => ErrorCode::Unspecified,
             },
             Self::UnknownLanguage => ErrorCode::UnknownLanguage,
+            Self::InvalidRequest(_) | Self::Internal(_) => ErrorCode::Unspecified,
         }
     }
 }
@@ -88,7 +95,7 @@ fn callback(highlight: ts::Highlight, output: &mut Vec<u8>) {
 }
 
 fn parse(job: FileJob) -> Result<DocumentResult, FailureResult> {
-    RESOURCES
+    PER_THREAD
         .with_borrow_mut(|pt| {
             let cancellation_flag = Arc::new(AtomicUsize::new(0));
 
@@ -129,26 +136,26 @@ fn parse(job: FileJob) -> Result<DocumentResult, FailureResult> {
 async fn html_handler(
     State(state): State<AppState>,
     body: Bytes,
-) -> Result<Response, AppError> {
-    // Parse FlatBuffers request - zero-copy!
+) -> Result<Response, HighlightError> {
     let request = flatbuffers::root::<Request>(&body)
-        .map_err(|e| AppError::InvalidRequest(e.to_string()))?;
+        .map_err(|e| HighlightError::InvalidRequest(e.to_string()))?;
 
+    // TODO: we need some sort of cap on request time.
     let timeout_ms = request.timeout_ms();
     let timeout = if timeout_ms == 0 {
-        state.per_file_timeout
+        state.default_per_file_timeout
     } else {
         Duration::from_millis(timeout_ms)
     };
 
-    let files = request.files().ok_or_else(|| AppError::InvalidRequest("No files provided".to_string()))?;
+    let files = request.files().ok_or_else(|| HighlightError::InvalidRequest("No files provided".to_string()))?;
 
     // Build jobs - we need to extract byte ranges from the original buffer
-    let jobs: Result<Vec<FileJob>, AppError> = files
+    let jobs: Result<Vec<FileJob>, HighlightError> = files
         .iter()
         .map(|file| {
             let filename = file.filename()
-                .ok_or_else(|| AppError::InvalidRequest("Missing filename".to_string()))?
+                .ok_or_else(|| HighlightError::InvalidRequest("Missing filename".to_string()))?
                 .to_string();
 
             // Try to get language from request, otherwise infer from filename
@@ -159,21 +166,15 @@ async fn html_handler(
             };
 
             // Get the contents bytes
-            let contents_fb = file.contents()
-                .ok_or_else(|| AppError::InvalidRequest("Missing file contents".to_string()))?;
-
-            let contents_slice = contents_fb.bytes();
-
-            // Calculate offset in the original buffer to create a zero-copy slice
-            let offset = contents_slice.as_ptr() as usize - body.as_ptr() as usize;
-            let len = contents_slice.len();
-            let contents = body.slice(offset..offset + len);
+            let contents = file.contents()
+                .ok_or_else(|| HighlightError::InvalidRequest("Missing file contents".to_string()))?
+                .bytes();
 
             Ok(FileJob {
                 ident: file.ident(),
                 filename,
                 language,
-                contents, // Zero-copy Bytes slice!
+                contents,
                 timeout,
             })
         })
@@ -188,7 +189,7 @@ async fn html_handler(
             pool.install(|| jobs.into_par_iter().partition_map(|x| parse(x).into()))
         })
         .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+        .map_err(|e| HighlightError::Internal(e.to_string()))?;
 
     // Build FlatBuffers response
     let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(1024);
@@ -250,29 +251,19 @@ async fn html_handler(
     Ok((StatusCode::OK, response_bytes.to_vec()).into_response())
 }
 
-#[derive(Debug)]
-enum AppError {
-    InvalidRequest(String),
-    Internal(String),
-}
-
-impl From<HighlightError> for AppError {
-    fn from(err: HighlightError) -> Self {
-        AppError::Internal(err.to_string())
-    }
-}
-
-impl From<anyhow::Error> for AppError {
+impl From<anyhow::Error> for HighlightError {
     fn from(err: anyhow::Error) -> Self {
-        AppError::Internal(err.to_string())
+        HighlightError::Internal(err.to_string())
     }
 }
 
-impl IntoResponse for AppError {
+impl IntoResponse for HighlightError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
-            AppError::InvalidRequest(msg) => (StatusCode::BAD_REQUEST, msg),
-            AppError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+            HighlightError::InvalidRequest(msg) => (StatusCode::BAD_REQUEST, msg),
+            HighlightError::TreeSitter(_) | HighlightError::UnknownLanguage | HighlightError::Internal(_) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, self.to_string())
+            }
         };
         (status, message).into_response()
     }
@@ -285,7 +276,7 @@ pub async fn main(num_threads: usize, default_timeout: Duration, addr: SocketAdd
 
     let state = AppState {
         pool: Arc::new(pool),
-        per_file_timeout: default_timeout,
+        default_per_file_timeout: default_timeout,
     };
 
     let app = Router::new()

@@ -3,7 +3,7 @@ use std::path::Path;
 use std::str::FromStr;
 use std::sync::LazyLock;
 
-use crate::daylight_generated::daylight::html::Language as FbLanguage;
+use crate::daylight_generated::daylight::common::Language as FbLanguage;
 use tree_sitter_highlight::HighlightConfiguration;
 
 pub static ALL_HIGHLIGHT_NAMES: [&str; 26] = [
