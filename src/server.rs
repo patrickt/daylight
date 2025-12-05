@@ -5,7 +5,10 @@ use rayon::prelude::*;
 use std::cell::RefCell;
 use std::net::ToSocketAddrs;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::thread_local;
+use std::time::Duration;
 use thiserror::Error;
 use tree_sitter_highlight as ts;
 
@@ -16,9 +19,14 @@ struct Daylight {
     pool: rayon::ThreadPool,
 }
 
+#[derive(Default)]
+struct PerThread {
+    highlighter: ts::Highlighter,
+    renderer: ts::HtmlRenderer,
+}
+
 thread_local! {
-    pub static TS_BACKEND: RefCell<ts::Highlighter> = RefCell::new(ts::Highlighter::new());
-    pub static RENDERER: RefCell<ts::HtmlRenderer> = RefCell::new(ts::HtmlRenderer::new());
+    pub static RESOURCES: RefCell<PerThread> = RefCell::default();
 }
 
 impl Daylight {
@@ -46,13 +54,12 @@ impl HighlightError {
     }
 }
 
-// Intermediate struct for passing data across thread boundaries
-// Cap'n Proto readers/builders are NOT Send, so we need to extract data first
 struct FileJob {
     ident: u16,
     filename: String,
     language: &'static lang::Language,
-    contents: Vec<u8>
+    contents: Vec<u8>,
+    timeout: Duration,
 }
 
 struct DocumentResult {
@@ -71,17 +78,34 @@ fn callback(_highlight: ts::Highlight, _span: &mut Vec<u8>) {
 }
 
 fn parse(job: FileJob) -> Result<DocumentResult, FailureResult> {
-    TS_BACKEND.with_borrow_mut(|hl| {
-        let iter = hl.highlight(&job.language.ts_config, &job.contents, None, |_cb| None)?;
-        RENDERER.with_borrow_mut(|rd| {
-            rd.reset();
-            rd.render(iter, &job.contents, &callback)?;
-            Ok(DocumentResult {
-                ident: job.ident,
-                filename: job.filename,
-                language: job.language.capnp_language,
-                lines: rd.lines().map(String::from).collect(),
-            })
+    RESOURCES.with_borrow_mut(|pt| {
+        let cancellation_flag = Arc::new(AtomicUsize::new(0));
+
+        // Spawn a task that will set the cancellation flag after timeout
+        if !job.timeout.is_zero() {
+            let flag_clone = cancellation_flag.clone();
+            let timeout = job.timeout;
+            rayon::spawn(move || {
+                std::thread::sleep(timeout);
+                flag_clone.store(1, Ordering::Relaxed);
+            });
+        }
+
+        let iter = pt.highlighter.highlight(
+            &job.language.ts_config,
+            &job.contents,
+            Some(&cancellation_flag),
+            |_| None,
+        )?;
+
+        pt.renderer.reset();
+        pt.renderer.render(iter, &job.contents, &callback)?;
+
+        Ok(DocumentResult {
+            ident: job.ident,
+            filename: job.filename,
+            language: job.language.capnp_language,
+            lines: pt.renderer.lines().map(String::from).collect(),
         })
     }).map_err(|err| {
         FailureResult {
@@ -97,9 +121,9 @@ impl html::Server for Daylight {
         params: html::HtmlParams,
         mut results: html::HtmlResults,
     ) -> Result<(), capnp::Error> {
-        // Read the request to get the input files
         let request = params.get()?.get_request()?;
         let files = request.get_files()?;
+        let timeout = Duration::from_millis(request.get_timeout_ms());
 
         let jobs: Result<Vec<FileJob>, capnp::Error> = files.iter()
             .map(|file| {
@@ -108,6 +132,7 @@ impl html::Server for Daylight {
                     filename: file.get_filename()?.to_string()?,
                     language: file.get_language()?.try_into()?,
                     contents: file.get_contents()?.to_vec(),
+                    timeout,
                 })
             })
             .collect();

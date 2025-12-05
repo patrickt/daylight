@@ -50,6 +50,7 @@ interface HtmlHighlighter {
   }
   struct Request {
     files @0 :List(File);
+    timeoutMs @1 :UInt64;
   }
   struct Document {
     ident @0 :UInt16;
