@@ -1,10 +1,10 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use crate::languages::Language;
+use crate::languages::Config;
 use crate::daylight_generated::daylight::html::*;
 
-pub async fn main(address: SocketAddr, language: &'static Language, path: PathBuf) -> anyhow::Result<()> {
+pub async fn main(address: SocketAddr, language: &'static Config, path: PathBuf) -> anyhow::Result<()> {
     // Read file contents
     let contents = std::fs::read(&path)?;
     let filename = path.file_name()
@@ -45,7 +45,7 @@ pub async fn main(address: SocketAddr, language: &'static Language, path: PathBu
     // Send HTTP request
     let url = format!("http://{}/v1/html", address);
     let client = reqwest::Client::new();
-    
+
     let response = client
         .post(&url)
         .header("Content-Type", "application/octet-stream")
@@ -66,7 +66,7 @@ pub async fn main(address: SocketAddr, language: &'static Language, path: PathBu
     if let Some(documents) = fb_response.documents() {
         if documents.len() > 0 {
             let doc = documents.get(0);
-            
+
             // Collect all lines into a single string
             let mut html_content = String::new();
             if let Some(lines) = doc.lines() {
@@ -76,7 +76,7 @@ pub async fn main(address: SocketAddr, language: &'static Language, path: PathBu
                     html_content.push('\n');
                 }
             }
-            
+
             // Write to /tmp/${FILENAME}.html
             let output_path = format!("/tmp/{}.html", filename);
             std::fs::write(&output_path, html_content)?;

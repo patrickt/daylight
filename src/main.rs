@@ -30,7 +30,7 @@ enum Commands {
     /// Run the client
     Client {
         #[arg(short = 'l', long)]
-        language: Option<&'static languages::Language>,
+        language: Option<&'static languages::Config>,
         address: std::net::SocketAddr,
         path: std::path::PathBuf,
     },

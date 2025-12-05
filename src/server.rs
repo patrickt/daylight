@@ -63,7 +63,7 @@ impl HighlightError {
 struct FileJob {
     ident: u16,
     filename: String,
-    language: &'static lang::Language,
+    language: &'static lang::Config,
     contents: bytes::Bytes, // Reference-counted buffer - zero-copy clone
     timeout: Duration,
 }
