@@ -1,0 +1,47 @@
+namespace daylight.html;
+
+enum Language : byte {
+  Unspecified = 0,
+  Agda = 1,
+  Bash = 2,
+  C = 3,
+}
+
+enum ErrorCode : byte {
+  Unspecified = 0,
+  TimedOut = 1,
+  Cancelled = 2,
+  UnknownLanguage = 3,
+}
+
+table File {
+  ident: uint16;
+  filename: string;
+  contents: [ubyte];  // Zero-copy byte array
+  options: [string];
+  language: Language;
+}
+
+table Request {
+  files: [File];
+  timeout_ms: uint64;
+}
+
+table Document {
+  ident: uint16;
+  filename: string;
+  language: Language;
+  lines: [string];
+}
+
+table Failure {
+  ident: uint16;
+  reason: ErrorCode;
+}
+
+table Response {
+  documents: [Document];
+  failures: [Failure];
+}
+
+root_type Request;

@@ -1,11 +1,15 @@
-use capnp_rpc::{rpc_twoparty_capnp, twoparty, RpcSystem};
-
-use futures::AsyncReadExt;
+use axum::{
+    body::Bytes,
+    extract::State,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    routing::post,
+    Router,
+};
 use rayon::prelude::*;
 use std::cell::RefCell;
 use std::net::SocketAddr;
 use std::path::Path;
-use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread_local;
@@ -13,11 +17,15 @@ use std::time::Duration;
 use thiserror::Error;
 use tree_sitter_highlight as ts;
 
-use crate::daylight_capnp::html_highlighter as html;
-use crate::{daylight_capnp, languages as lang};
+use crate::daylight_generated::daylight::html::{
+    Document, DocumentArgs, ErrorCode, Failure, FailureArgs, Language,
+    Request, Response as FbResponse, ResponseArgs,
+};
+use crate::languages as lang;
 
-struct Daylight {
-    pool: rayon::ThreadPool,
+#[derive(Clone)]
+struct AppState {
+    pool: Arc<rayon::ThreadPool>,
     per_file_timeout: Duration,
 }
 
@@ -31,13 +39,6 @@ thread_local! {
     pub static RESOURCES: RefCell<PerThread> = RefCell::default();
 }
 
-impl Daylight {
-    fn new(num_threads: usize, per_file_timeout: Duration) -> Result<Self, rayon::ThreadPoolBuildError> {
-        let pool = rayon::ThreadPoolBuilder::new().num_threads(num_threads).build()?;
-        Ok(Daylight { pool, per_file_timeout })
-    }
-}
-
 #[derive(Error, Debug)]
 enum HighlightError {
     #[error("highlighting failed: {0}")]
@@ -47,21 +48,15 @@ enum HighlightError {
 }
 
 impl HighlightError {
-    fn as_code(&self) -> daylight_capnp::ErrorCode {
+    fn as_code(&self) -> ErrorCode {
         match self {
             Self::TreeSitter(tserr) => match tserr {
-                ts::Error::Cancelled => daylight_capnp::ErrorCode::Cancelled,
-                ts::Error::InvalidLanguage => daylight_capnp::ErrorCode::UnknownLanguage,
-                ts::Error::Unknown => daylight_capnp::ErrorCode::Unspecified,
+                ts::Error::Cancelled => ErrorCode::Cancelled,
+                ts::Error::InvalidLanguage => ErrorCode::UnknownLanguage,
+                ts::Error::Unknown => ErrorCode::Unspecified,
             },
-            Self::UnknownLanguage => daylight_capnp::ErrorCode::UnknownLanguage,
+            Self::UnknownLanguage => ErrorCode::UnknownLanguage,
         }
-    }
-}
-
-impl From<HighlightError> for capnp::Error {
-    fn from(err: HighlightError) -> Self {
-        capnp::Error::failed(err.to_string())
     }
 }
 
@@ -69,14 +64,14 @@ struct FileJob {
     ident: u16,
     filename: String,
     language: &'static lang::Language,
-    contents: Vec<u8>,
+    contents: bytes::Bytes, // Reference-counted buffer - zero-copy clone
     timeout: Duration,
 }
 
 struct DocumentResult {
     ident: u16,
     filename: String,
-    language: crate::daylight_capnp::Language,
+    language: Language,
     lines: Vec<String>,
 }
 
@@ -85,7 +80,12 @@ struct FailureResult {
     reason: HighlightError,
 }
 
-fn callback(_highlight: ts::Highlight, _span: &mut Vec<u8>) {}
+fn callback(highlight: ts::Highlight, output: &mut Vec<u8>) {
+    let kind = lang::ALL_HIGHLIGHT_NAMES[highlight.0];
+    output.extend(b"class=\"");
+    output.extend(kind.as_bytes().iter());
+    output.extend(b"\"")
+}
 
 fn parse(job: FileJob) -> Result<DocumentResult, FailureResult> {
     RESOURCES
@@ -104,7 +104,7 @@ fn parse(job: FileJob) -> Result<DocumentResult, FailureResult> {
 
             let iter = pt.highlighter.highlight(
                 &job.language.ts_config,
-                &job.contents,
+                &job.contents, // Zero-copy: Bytes derefs to &[u8]
                 Some(&cancellation_flag),
                 |_| None,
             )?;
@@ -115,7 +115,7 @@ fn parse(job: FileJob) -> Result<DocumentResult, FailureResult> {
             Ok(DocumentResult {
                 ident: job.ident,
                 filename: job.filename,
-                language: job.language.capnp_language,
+                language: job.language.fb_language,
                 lines: pt.renderer.lines().map(String::from).collect(),
             })
         })
@@ -125,103 +125,177 @@ fn parse(job: FileJob) -> Result<DocumentResult, FailureResult> {
         })
 }
 
-impl html::Server for Daylight {
-    async fn html(
-        self: Rc<Self>,
-        params: html::HtmlParams,
-        mut results: html::HtmlResults,
-    ) -> Result<(), capnp::Error> {
-        let request = params.get()?.get_request()?;
-        let files = request.get_files()?;
-        let timeout_ms = request.get_timeout_ms();
-        let timeout = if timeout_ms == 0 {
-            self.per_file_timeout
-        } else {
-            Duration::from_millis(timeout_ms)
-        };
+// Handler for the /v1/html endpoint
+async fn html_handler(
+    State(state): State<AppState>,
+    body: Bytes,
+) -> Result<Response, AppError> {
+    // Parse FlatBuffers request - zero-copy!
+    let request = flatbuffers::root::<Request>(&body)
+        .map_err(|e| AppError::InvalidRequest(e.to_string()))?;
 
-        let jobs: Result<Vec<FileJob>, capnp::Error> = files
-            .iter()
-            .map(|file| {
-                let filename = file.get_filename()?.to_string()?;
+    let timeout_ms = request.timeout_ms();
+    let timeout = if timeout_ms == 0 {
+        state.per_file_timeout
+    } else {
+        Duration::from_millis(timeout_ms)
+    };
 
-                // Try to get language from request, otherwise infer from filename
-                let language = match file.get_language()? {
-                    daylight_capnp::Language::Unspecified => lang::from_path(Path::new(&filename))
-                        .ok_or(HighlightError::UnknownLanguage)?,
+    let files = request.files().ok_or_else(|| AppError::InvalidRequest("No files provided".to_string()))?;
 
-                    lang => lang.try_into()?,
-                };
+    // Build jobs - we need to extract byte ranges from the original buffer
+    let jobs: Result<Vec<FileJob>, AppError> = files
+        .iter()
+        .map(|file| {
+            let filename = file.filename()
+                .ok_or_else(|| AppError::InvalidRequest("Missing filename".to_string()))?
+                .to_string();
 
-                Ok(FileJob {
-                    ident: file.get_ident(),
-                    filename,
-                    language,
-                    contents: file.get_contents()?.to_vec(),
-                    timeout,
-                })
+            // Try to get language from request, otherwise infer from filename
+            let language = match file.language() {
+                Language::Unspecified => lang::from_path(Path::new(&filename))
+                    .ok_or(HighlightError::UnknownLanguage)?,
+                lang => lang.try_into()?,
+            };
+
+            // Get the contents bytes
+            let contents_fb = file.contents()
+                .ok_or_else(|| AppError::InvalidRequest("Missing file contents".to_string()))?;
+
+            let contents_slice = contents_fb.bytes();
+
+            // Calculate offset in the original buffer to create a zero-copy slice
+            let offset = contents_slice.as_ptr() as usize - body.as_ptr() as usize;
+            let len = contents_slice.len();
+            let contents = body.slice(offset..offset + len);
+
+            Ok(FileJob {
+                ident: file.ident(),
+                filename,
+                language,
+                contents, // Zero-copy Bytes slice!
+                timeout,
             })
-            .collect();
-        let jobs = jobs?;
+        })
+        .collect();
 
-        let (failure_results, doc_results): (Vec<FailureResult>, Vec<DocumentResult>) = self
-            .pool
-            .install(|| jobs.into_par_iter().partition_map(|x| parse(x).into()));
+    let jobs = jobs?;
 
-        let mut response = results.get().init_response();
-        {
-            let mut documents = response.reborrow().init_documents(doc_results.len() as u32);
-            for (i, doc_result) in doc_results.iter().enumerate() {
-                let mut doc = documents.reborrow().get(i as u32);
-                doc.set_ident(doc_result.ident);
-                doc.set_filename(&doc_result.filename);
-                doc.set_language(doc_result.language);
-                let mut lines = doc.init_lines(doc_result.lines.len() as u32);
-                for (j, line) in doc_result.lines.iter().enumerate() {
-                    lines.set(j as u32, line);
-                }
-            }
-        }
+    // Process in thread pool - spawn_blocking to bridge async -> sync
+    let pool = state.pool.clone();
+    let (failure_results, doc_results): (Vec<FailureResult>, Vec<DocumentResult>) =
+        tokio::task::spawn_blocking(move || {
+            pool.install(|| jobs.into_par_iter().partition_map(|x| parse(x).into()))
+        })
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?;
 
-        {
-            let mut failures = response
-                .reborrow()
-                .init_failures(failure_results.len() as u32);
-            for (i, failure_result) in failure_results.iter().enumerate() {
-                let mut failure = failures.reborrow().get(i as u32);
-                failure.set_ident(failure_result.ident);
-                failure.set_reason(failure_result.reason.as_code())
-            }
-        }
+    // Build FlatBuffers response
+    let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(1024);
 
-        Ok(())
+    // Build documents
+    let documents: Vec<_> = doc_results
+        .iter()
+        .map(|doc| {
+            let filename = builder.create_string(&doc.filename);
+            let lines: Vec<_> = doc
+                .lines
+                .iter()
+                .map(|line| builder.create_string(line))
+                .collect();
+            let lines_vec = builder.create_vector(&lines);
+
+            Document::create(
+                &mut builder,
+                &DocumentArgs {
+                    ident: doc.ident,
+                    filename: Some(filename),
+                    language: doc.language,
+                    lines: Some(lines_vec),
+                },
+            )
+        })
+        .collect();
+
+    let documents_vec = builder.create_vector(&documents);
+
+    // Build failures
+    let failures: Vec<_> = failure_results
+        .iter()
+        .map(|failure| {
+            Failure::create(
+                &mut builder,
+                &FailureArgs {
+                    ident: failure.ident,
+                    reason: failure.reason.as_code(),
+                },
+            )
+        })
+        .collect();
+
+    let failures_vec = builder.create_vector(&failures);
+
+    // Build response
+    let fb_response = FbResponse::create(
+        &mut builder,
+        &ResponseArgs {
+            documents: Some(documents_vec),
+            failures: Some(failures_vec),
+        },
+    );
+
+    builder.finish(fb_response, None);
+    let response_bytes = builder.finished_data();
+
+    Ok((StatusCode::OK, response_bytes.to_vec()).into_response())
+}
+
+#[derive(Debug)]
+enum AppError {
+    InvalidRequest(String),
+    Internal(String),
+}
+
+impl From<HighlightError> for AppError {
+    fn from(err: HighlightError) -> Self {
+        AppError::Internal(err.to_string())
+    }
+}
+
+impl From<anyhow::Error> for AppError {
+    fn from(err: anyhow::Error) -> Self {
+        AppError::Internal(err.to_string())
+    }
+}
+
+impl IntoResponse for AppError {
+    fn into_response(self) -> Response {
+        let (status, message) = match self {
+            AppError::InvalidRequest(msg) => (StatusCode::BAD_REQUEST, msg),
+            AppError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+        };
+        (status, message).into_response()
     }
 }
 
 pub async fn main(num_threads: usize, default_timeout: Duration, addr: SocketAddr) -> anyhow::Result<()> {
-    tokio::task::LocalSet::new()
-        .run_until(async move {
-            let listener = tokio::net::TcpListener::bind(addr).await?;
-            let daylight = Daylight::new(num_threads, default_timeout)?;
-            let daylight_client: html::Client = capnp_rpc::new_client(daylight);
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(num_threads)
+        .build()?;
 
-            loop {
-                let (stream, _) = listener.accept().await?;
-                stream.set_nodelay(true)?;
-                let (reader, writer) =
-                    tokio_util::compat::TokioAsyncReadCompatExt::compat(stream).split();
-                let network = twoparty::VatNetwork::new(
-                    futures::io::BufReader::new(reader),
-                    futures::io::BufWriter::new(writer),
-                    rpc_twoparty_capnp::Side::Server,
-                    Default::default(),
-                );
+    let state = AppState {
+        pool: Arc::new(pool),
+        per_file_timeout: default_timeout,
+    };
 
-                let rpc_system =
-                    RpcSystem::new(Box::new(network), Some(daylight_client.clone().client));
+    let app = Router::new()
+        .route("/v1/html", post(html_handler))
+        .with_state(state);
 
-                tokio::task::spawn_local(rpc_system);
-            }
-        })
-        .await
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    println!("Listening on {}", addr);
+
+    axum::serve(listener, app).await?;
+
+    Ok(())
 }

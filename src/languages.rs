@@ -1,15 +1,43 @@
-//
-
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::LazyLock;
 
-use crate::daylight_capnp;
+use crate::daylight_generated::daylight::html::Language as FbLanguage;
 use tree_sitter_highlight::HighlightConfiguration;
 
+pub static ALL_HIGHLIGHT_NAMES: [&str; 26] = [
+    "attribute",
+    "comment",
+    "constant",
+    "constant.builtin",
+    "constructor",
+    "embedded",
+    "function",
+    "function.builtin",
+    "keyword",
+    "module",
+    "number",
+    "operator",
+    "property",
+    "property.builtin",
+    "punctuation",
+    "punctuation.bracket",
+    "punctuation.delimiter",
+    "punctuation.special",
+    "string",
+    "string.special",
+    "tag",
+    "type",
+    "type.builtin",
+    "variable",
+    "variable.builtin",
+    "variable.parameter",
+];
+
+
 pub struct Language {
-    pub capnp_language: daylight_capnp::Language,
+    pub fb_language: FbLanguage,
     pub ts_config: tree_sitter_highlight::HighlightConfiguration,
     pub name: &'static str,
     pub extensions: &'static [&'static str],
@@ -17,16 +45,18 @@ pub struct Language {
 
 impl Language {
     fn new(
-        capnp_language: daylight_capnp::Language,
+        fb_language: FbLanguage,
         ts_language: tree_sitter::Language,
         name: &'static str,
         highlights_query: &str,
         extensions: &'static [&'static str],
     ) -> Self {
+        let mut ts_config = HighlightConfiguration::new(ts_language, name, highlights_query, "", "")
+            .expect("Tree-sitter bindings are broken");
+        ts_config.configure(&ALL_HIGHLIGHT_NAMES);
         Language {
-            capnp_language,
-            ts_config: HighlightConfiguration::new(ts_language, name, highlights_query, "", "")
-                .expect("Tree-sitter bindings are broken"),
+            fb_language,
+            ts_config,
             name,
             extensions,
         }
@@ -35,7 +65,7 @@ impl Language {
 
 static AGDA: LazyLock<Language> = LazyLock::new(|| {
     Language::new(
-        daylight_capnp::Language::Agda,
+        FbLanguage::Agda,
         tree_sitter_agda::LANGUAGE.into(),
         "agda",
         tree_sitter_agda::HIGHLIGHTS_QUERY,
@@ -45,7 +75,7 @@ static AGDA: LazyLock<Language> = LazyLock::new(|| {
 
 static BASH: LazyLock<Language> = LazyLock::new(|| {
     Language::new(
-        daylight_capnp::Language::Bash,
+        FbLanguage::Bash,
         tree_sitter_bash::LANGUAGE.into(),
         "bash",
         tree_sitter_bash::HIGHLIGHT_QUERY,
@@ -55,7 +85,7 @@ static BASH: LazyLock<Language> = LazyLock::new(|| {
 
 static C: LazyLock<Language> = LazyLock::new(|| {
     Language::new(
-        daylight_capnp::Language::C,
+        FbLanguage::C,
         tree_sitter_c::LANGUAGE.into(),
         "c",
         tree_sitter_c::HIGHLIGHT_QUERY,
@@ -99,17 +129,18 @@ pub fn from_path(path: &Path) -> Option<&'static Language> {
         .and_then(from_extension)
 }
 
-impl TryInto<&'static Language> for daylight_capnp::Language {
-    type Error = capnp::Error;
+impl TryFrom<FbLanguage> for &'static Language {
+    type Error = anyhow::Error;
 
-    fn try_into(self) -> Result<&'static Language, Self::Error> {
-        match self {
-            daylight_capnp::Language::Agda => Ok(&*AGDA),
-            daylight_capnp::Language::Bash => Ok(&*BASH),
-            daylight_capnp::Language::C => Ok(&*C),
-            daylight_capnp::Language::Unspecified => Err(capnp::Error::failed(
-                "Language::Unspecified cannot be converted to a Language".to_string(),
+    fn try_from(fb_lang: FbLanguage) -> Result<Self, Self::Error> {
+        match fb_lang {
+            FbLanguage::Agda => Ok(&*AGDA),
+            FbLanguage::Bash => Ok(&*BASH),
+            FbLanguage::C => Ok(&*C),
+            FbLanguage::Unspecified => Err(anyhow::anyhow!(
+                "Language::Unspecified cannot be converted to a Language"
             )),
+            _ => Err(anyhow::anyhow!("Unknown language variant")),
         }
     }
 }

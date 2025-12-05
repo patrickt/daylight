@@ -1,6 +1,8 @@
 use clap::{Parser, Subcommand};
 
-capnp::generated_code!(pub mod daylight_capnp);
+#[path = "generated/daylight_generated.rs"]
+#[allow(warnings)]
+pub mod daylight_generated;
 
 pub mod client;
 pub mod languages;
@@ -19,11 +21,7 @@ enum Commands {
     Server {
         address: std::net::SocketAddr,
 
-        #[arg(
-            long,
-            env = "DAYLIGHT_HIGHLIGHTER_THREADS",
-            default_value = "8"
-        )]
+        #[arg(long, env = "DAYLIGHT_HIGHLIGHTER_THREADS", default_value = "8")]
         threads: usize,
 
         #[arg(long, env = "DAYLIGHT_PER_FILE_TIMEOUT_MS", default_value = "30000")]
@@ -38,7 +36,7 @@ enum Commands {
     },
 }
 
-#[tokio::main(flavor = "current_thread")]
+#[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
