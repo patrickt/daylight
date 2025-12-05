@@ -2,6 +2,7 @@ capnp::generated_code!(pub mod daylight_capnp);
 
 pub mod client;
 pub mod server;
+pub mod languages;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

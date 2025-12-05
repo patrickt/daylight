@@ -11,8 +11,12 @@ capnp-futures = "0.23.0"
 capnp-rpc = "0.23.0"
 futures = "0.3"
 rayon = "1.11.0"
+thiserror = "2.0.17"
 tokio = { version = "1", features = ["net", "rt", "macros"]}
 tokio-util = { version = "0.7", features = ["compat"] }
+tree-sitter = "0.25.10"
+tree-sitter-c = "0.24.1"
+tree-sitter-highlight = "0.25.10"
 
 [build-dependencies]
 capnpc = "0.23.2"

@@ -33,8 +33,10 @@ enum Encoding {
 }
 
 enum ErrorCode {
-  unknown @0;
+  unspecified @0;
   timedOut @1;
+  cancelled @2;
+  unknownLanguage @3;
 }
 
 interface HtmlHighlighter {
@@ -53,7 +55,7 @@ interface HtmlHighlighter {
     ident @0 :UInt16;
     filename @1 :Text;
     language @2 :Language;
-    html @3 :Text;
+    lines @3 :List(Text);
   }
   struct Failure {
     ident @0 :UInt16;
@@ -61,6 +63,7 @@ interface HtmlHighlighter {
   }
   struct Response {
     documents @0 :List(Document);
+    failures @1 :List(Failure);
   }
 
   html @0 (request: Request) -> (response: Response);
