@@ -226,6 +226,7 @@ pub mod html {
 pub enum FileOffset {}
 #[derive(Copy, Clone, PartialEq)]
 
+/// A file to be highlighted.
 pub struct File<'a> {
   pub _tab: flatbuffers::Table<'a>,
 }

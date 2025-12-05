@@ -27,7 +27,6 @@ use crate::languages as lang;
 #[derive(Clone)]
 struct AppState {
     pool: Arc<rayon::ThreadPool>,
-    /// TODO: someday provide both default and max settings for timeout_ms, and reject timeouts that are too large.
     default_per_file_timeout: Duration,
 }
 
@@ -67,11 +66,13 @@ impl HighlightError {
     }
 }
 
-struct FileJob {
+struct Job {
     ident: u16,
     filename: String,
     language: &'static lang::Config,
-    contents: bytes::Bytes, // Reference-counted buffer - zero-copy clone
+    // This would make more sense if it were a &[u8], but we can't send lifetimed
+    // data across the thread pool boundary. So we slice it out of the axum request.
+    contents: bytes::Bytes,
     timeout: Duration,
 }
 
@@ -94,7 +95,7 @@ fn callback(highlight: ts::Highlight, output: &mut Vec<u8>) {
     output.extend(b"\"")
 }
 
-fn parse(job: FileJob) -> Result<DocumentResult, FailureResult> {
+fn parse(job: Job) -> Result<DocumentResult, FailureResult> {
     PER_THREAD
         .with_borrow_mut(|pt| {
             let cancellation_flag = Arc::new(AtomicUsize::new(0));
@@ -151,7 +152,7 @@ async fn html_handler(
     let files = request.files().ok_or_else(|| HighlightError::InvalidRequest("No files provided".to_string()))?;
 
     // Build jobs - we need to extract byte ranges from the original buffer
-    let jobs: Result<Vec<FileJob>, HighlightError> = files
+    let jobs: Result<Vec<Job>, HighlightError> = files
         .iter()
         .map(|file| {
             let filename = file.filename()
@@ -166,11 +167,17 @@ async fn html_handler(
             };
 
             // Get the contents bytes
-            let contents = file.contents()
-                .ok_or_else(|| HighlightError::InvalidRequest("Missing file contents".to_string()))?
-                .bytes();
+            let contents_fb = file.contents()
+                .ok_or_else(|| HighlightError::InvalidRequest("Missing file contents".to_string()))?;
 
-            Ok(FileJob {
+            let contents_slice = contents_fb.bytes();
+
+            // Calculate offset in the original buffer to create a zero-copy slice
+            let offset = contents_slice.as_ptr() as usize - body.as_ptr() as usize;
+            let len = contents_slice.len();
+            let contents = body.slice(offset..offset + len);
+
+            Ok(Job {
                 ident: file.ident(),
                 filename,
                 language,
