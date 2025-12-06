@@ -270,7 +270,7 @@ pub async fn html_handler(
                 result.unwrap_or_else(|_elapsed| {
                     // Timeout occurred - set the cancellation flag so inflight tree-sitter-side tasks
                     // know that they should cancel and return.
-                    cancellation_flag_for_timeout.store(1, Ordering::Relaxed);
+                    cancellation_flag_for_timeout.store(1, Ordering::SeqCst);
                     OwnedDocument::error(
                         ident,
                         filename_for_timeout,
