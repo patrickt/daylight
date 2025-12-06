@@ -36,8 +36,7 @@ enum Commands {
     },
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
@@ -46,22 +45,32 @@ async fn main() -> anyhow::Result<()> {
             threads,
             timeout_ms,
         } => {
+            // Build runtime with custom blocking thread pool size
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .max_blocking_threads(threads)
+                .enable_all()
+                .build()?;
+
             let timeout = std::time::Duration::from_millis(timeout_ms);
-            server::main(threads, timeout, address).await
+            runtime.block_on(server::main(timeout, address))
         }
         Commands::Client {
             language,
             address,
             path,
         } => {
-            client::main(
+            // Client uses default runtime
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()?;
+
+            runtime.block_on(client::main(
                 address,
                 language.unwrap_or_else(|| {
                     languages::from_path(&path).expect("Could not infer language from path")
                 }),
                 path,
-            )
-            .await
+            ))
         }
     }
 }

@@ -6,7 +6,6 @@ use axum::{
     routing::post,
     Router,
 };
-use rayon::prelude::*;
 use std::cell::RefCell;
 use std::net::SocketAddr;
 use std::path::Path;
@@ -26,7 +25,6 @@ use crate::languages as lang;
 
 #[derive(Clone)]
 struct AppState {
-    pool: Arc<rayon::ThreadPool>,
     default_per_file_timeout: Duration,
 }
 
@@ -104,7 +102,7 @@ fn parse(job: Job) -> Result<DocumentResult, FailureResult> {
             if !job.timeout.is_zero() {
                 let flag_clone = cancellation_flag.clone();
                 let timeout = job.timeout;
-                rayon::spawn(move || {
+                std::thread::spawn(move || {
                     std::thread::sleep(timeout);
                     flag_clone.store(1, Ordering::Relaxed);
                 });
@@ -151,10 +149,11 @@ async fn html_handler(
 
     let files = request.files().ok_or_else(|| HighlightError::InvalidRequest("No files provided".to_string()))?;
 
-    // Build jobs - we need to extract byte ranges from the original buffer
-    let jobs: Result<Vec<Job>, HighlightError> = files
+    // Spawn a blocking task for each file
+    let tasks: Vec<_> = files
         .iter()
         .map(|file| {
+            let ident = file.ident();
             let filename = file.filename()
                 .ok_or_else(|| HighlightError::InvalidRequest("Missing filename".to_string()))?
                 .to_string();
@@ -174,29 +173,35 @@ async fn html_handler(
 
             // Calculate offset in the original buffer to create a zero-copy slice
             let offset = contents_slice.as_ptr() as usize - body.as_ptr() as usize;
-            let len = contents_slice.len();
-            let contents = body.slice(offset..offset + len);
+            let contents = body.slice(offset..offset + contents_slice.len());
 
-            Ok(Job {
-                ident: file.ident(),
-                filename,
-                language,
-                contents,
-                timeout,
-            })
+            // Spawn blocking task for this file
+            Ok(tokio::task::spawn_blocking(move || {
+                parse(Job {
+                    ident,
+                    filename,
+                    language,
+                    contents,
+                    timeout,
+                })
+            }))
         })
-        .collect();
+        .collect::<Result<Vec<_>, HighlightError>>()?;
 
-    let jobs = jobs?;
+    // Wait for all tasks to complete
+    let results = futures::future::join_all(tasks).await;
 
-    // Process in thread pool - spawn_blocking to bridge async -> sync
-    let pool = state.pool.clone();
-    let (failure_results, doc_results): (Vec<FailureResult>, Vec<DocumentResult>) =
-        tokio::task::spawn_blocking(move || {
-            pool.install(|| jobs.into_par_iter().partition_map(|x| parse(x).into()))
-        })
-        .await
-        .map_err(|e| HighlightError::Internal(e.to_string()))?;
+    // Partition into failures and successes
+    let mut failure_results = Vec::new();
+    let mut doc_results = Vec::new();
+
+    for result in results {
+        match result {
+            Ok(Ok(doc)) => doc_results.push(doc),
+            Ok(Err(failure)) => failure_results.push(failure),
+            Err(e) => return Err(HighlightError::Internal(format!("Task join error: {}", e))),
+        }
+    }
 
     // Build FlatBuffers response
     let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(1024);
@@ -276,13 +281,8 @@ impl IntoResponse for HighlightError {
     }
 }
 
-pub async fn main(num_threads: usize, default_timeout: Duration, addr: SocketAddr) -> anyhow::Result<()> {
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(num_threads)
-        .build()?;
-
+pub async fn main(default_timeout: Duration, addr: SocketAddr) -> anyhow::Result<()> {
     let state = AppState {
-        pool: Arc::new(pool),
         default_per_file_timeout: default_timeout,
     };
 
