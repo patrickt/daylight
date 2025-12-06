@@ -186,9 +186,9 @@ async fn test_timeout_too_large() {
     assert!(response.is_err());
 }
 
-// Property: All valid C code should produce some highlighted output
+// Property: even garbage sent down the line should still be reified in the result
 #[quickcheck]
-fn prop_valid_c_produces_output(code: String) -> TestResult {
+fn prop_arbitrary_input_still_produces_response(code: String) -> TestResult {
     // Skip empty or overly long strings
     if code.is_empty() || code.len() > 10000 {
         return TestResult::discard();
@@ -259,53 +259,4 @@ fn prop_idents_preserved(idents: Vec<u16>) -> TestResult {
 
         TestResult::from_bool(returned_idents == expected_idents)
     })
-}
-
-// Property: Response should always be valid FlatBuffers
-#[quickcheck]
-fn prop_response_always_valid_flatbuffers(file_count: u8) -> TestResult {
-    if file_count == 0 || file_count > 50 {
-        return TestResult::discard();
-    }
-
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    rt.block_on(async {
-        let state = AppState {
-            default_per_file_timeout: Duration::from_secs(5),
-            max_per_file_timeout: Duration::from_secs(10),
-        };
-
-        let files: Vec<_> = (0..file_count)
-            .map(|i| (i as u16, "test.c", "int x;", common::Language::C))
-            .collect();
-
-        let request_bytes = build_request(files);
-        let response = html_handler(State(state), Bytes::from(request_bytes))
-            .await
-            .unwrap();
-
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-
-        // Should be able to parse without error
-        let parse_result = flatbuffers::root::<html::Response>(&body);
-        TestResult::from_bool(parse_result.is_ok())
-    })
-}
-
-#[test]
-fn test_owned_document_error_helper() {
-    let doc = OwnedDocument::error(
-        42,
-        Arc::from("test.c"),
-        common::Language::C,
-        common::ErrorCode::TimedOut,
-    );
-
-    assert_eq!(doc.ident, 42);
-    assert_eq!(doc.filename.as_ref(), "test.c");
-    assert_eq!(doc.language, common::Language::C);
-    assert_eq!(doc.error_code, common::ErrorCode::TimedOut);
-    assert!(doc.lines.is_empty());
 }

@@ -36,24 +36,16 @@ pub enum HtmlError {
     DecodeError(#[from] flatbuffers::InvalidFlatbuffer),
     #[error("Timeout too large (max supported: {max}ms)", max = .0.as_millis())]
     TimeoutTooLarge(Duration),
-    #[error("Internal service error: {0}")]
-    #[allow(dead_code)]
-    Internal(String),
 }
 
 impl IntoResponse for HtmlError {
     fn into_response(self) -> axum::response::Response {
-        use HtmlError::*;
-        let code = match self {
-            Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
-            _ => StatusCode::BAD_REQUEST,
-        };
-        (code, self.to_string()).into_response()
+        (StatusCode::BAD_REQUEST, self.to_string()).into_response()
     }
 }
 
 fn build_response(
-    doc_results: impl IntoIterator<Item = OwnedDocument>,
+    doc_results: Vec<OwnedDocument>
 ) -> Result<axum::response::Response, HtmlError> {
     let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(1024);
 
@@ -205,7 +197,7 @@ pub async fn html_handler(
             let filename: Arc<str> = Arc::from(file.filename().unwrap_or_default());
             let language = file.language();
 
-            // Bail early before spawning a task, if possible.
+            // Bail early before spawning a task, if there's no work to do.
             if file.contents().is_none_or(|s| s.is_empty()) {
                 // We need a left_future here because Ready and Timeout<JoinHandle> are different future types,
                 // even though they end up (after some .map() calls, in the latter case) returning the same type
@@ -290,7 +282,7 @@ pub async fn html_handler(
         })
         .collect();
     // Wait on all in-flight tasks simultaneously with .collect() and build a response.
-    build_response(tasks.collect::<Vec<_>>().await)
+    build_response(tasks.collect().await)
 }
 
 pub async fn main(
