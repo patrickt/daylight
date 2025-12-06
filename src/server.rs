@@ -193,8 +193,9 @@ pub async fn html_handler(
         return build_response(vec![]);
     }
 
-    // This is the heart of the app: efficiently batching and dispatching highlight operations,
-    // propagating cancellation signals, and returning them in a stream.
+    // This is the heart of the app: efficiently enqueuing concurrent highlighting requests,
+    // propagating cancellation signals, and returning them in a stream, without
+    // starving the tokio event loop and while processing as many documents as possible.
     let tasks: FuturesUnordered<_> = files
         .iter()
         .map(|file| {
@@ -217,20 +218,22 @@ pub async fn html_handler(
             }
 
             // Look up the configured language from languages.rs
-            let native_language = match file.language() {
-                common::Language::Unspecified => todo!(), // TODO infer language from filename
-                lang => match lang.try_into() {
-                    Ok(l) => l,
-                    Err(_) => {
-                        return futures::future::ready(OwnedDocument::error(
-                            ident,
-                            filename,
-                            language,
-                            common::ErrorCode::UnknownLanguage,
-                        ))
-                        .left_future()
-                    }
-                },
+            let native_language = if file.language() == common::Language::Unspecified {
+                // Infer language from filename
+                languages::from_path(std::path::Path::new(filename.as_ref()))
+            } else {
+                // Convert FlatBuffers language to native Config
+                file.language().try_into().ok()
+            };
+
+            let Some(native_language) = native_language else {
+                return futures::future::ready(OwnedDocument::error(
+                    ident,
+                    filename.clone(),
+                    language,
+                    common::ErrorCode::UnknownLanguage,
+                ))
+                .left_future();
             };
             // To avoid unnecessary copies, we slice out of the request body and
             // pass that memory location down to tree-sitter-highlight.
