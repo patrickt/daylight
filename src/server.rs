@@ -64,8 +64,6 @@ impl HighlightError {
     }
 }
 
-type ParseResult = Result<DocumentResult, FailureResult>;
-
 struct DocumentResult {
     ident: u16,
     filename: String,
@@ -160,20 +158,10 @@ fn parse(
     filename: String,
     language: &'static lang::Config,
     contents: bytes::Bytes,
-    timeout: Duration,
-    cancellation_flag: Arc<AtomicUsize>
-) -> ParseResult {
+    cancellation_flag: Arc<AtomicUsize>,
+) -> Result<DocumentResult, FailureResult> {
     PER_THREAD
         .with_borrow_mut(|pt| {
-            // Spawn a task that will set the cancellation flag after timeout
-            if !timeout.is_zero() {
-                let flag_clone = cancellation_flag.clone();
-                std::thread::spawn(move || {
-                    std::thread::sleep(timeout);
-                    flag_clone.store(1, Ordering::Relaxed);
-                });
-            }
-
             let iter = pt.highlighter.highlight(
                 &language.ts_config,
                 &contents, // Zero-copy: Bytes derefs to &[u8]
@@ -205,7 +193,6 @@ async fn html_handler(
     let request = flatbuffers::root::<Request>(&body)
         .map_err(|e| HighlightError::InvalidRequest(e.to_string()))?;
 
-    let cancellation_flag = Arc::new(AtomicUsize::new(0));
     let timeout_ms = request.timeout_ms();
     let timeout = if timeout_ms == 0 {
         state.default_per_file_timeout
@@ -220,7 +207,7 @@ async fn html_handler(
     }
 
     // Spawn a blocking task for each file
-    let tasks: Vec<_> = files
+    let tasks = files
         .iter()
         .map(|file| {
             let ident = file.ident();
@@ -240,15 +227,35 @@ async fn html_handler(
                 .ok_or_else(|| HighlightError::InvalidRequest("Missing file contents".to_string()))?
                 .bytes();
             let contents = slice_from_vector(&body, contents_slice);
-            let cancellation_flag = cancellation_flag.clone();
-            // Spawn blocking task for this file
-            Ok(tokio::task::spawn_blocking(move || {
-                parse(ident, filename, language, contents, timeout, cancellation_flag)
-            }))
+
+            // Create cancellation flag for this file
+            let cancellation_flag = Arc::new(AtomicUsize::new(0));
+            let cancel_clone = cancellation_flag.clone();
+
+            // Spawn blocking task for this file with timeout
+            let task = tokio::task::spawn_blocking(move || {
+                parse(ident, filename, language, contents, cancellation_flag)
+            });
+
+            Ok(async move {
+                // Race the task against the timeout
+                match tokio::time::timeout(timeout, task).await {
+                    Ok(result) => result,
+                    Err(_) => {
+                        // Timeout occurred - signal cancellation to tree-sitter
+                        cancel_clone.store(1, Ordering::Relaxed);
+                        Ok(Err(FailureResult {
+                            ident,
+                            reason: HighlightError::TreeSitter(tree_sitter_highlight::Error::Cancelled),
+                        }))
+                    }
+                }
+            })
         })
         .collect::<Result<Vec<_>, HighlightError>>()?;
 
     // Wait for all tasks to complete
+
     let results = futures::future::join_all(tasks).await;
 
     // Partition into failures and successes
