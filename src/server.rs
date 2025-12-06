@@ -7,7 +7,7 @@ use crate::daylight_generated::daylight::common::{self};
 use crate::daylight_generated::daylight::html;
 use crate::languages;
 use axum::{body::Bytes, extract::State, response::IntoResponse, routing::post, Router};
-use futures::{future::Ready, stream::FuturesUnordered};
+use futures::stream::FuturesUnordered;
 use futures::{FutureExt, StreamExt};
 use http::StatusCode;
 use thiserror::Error;
@@ -52,12 +52,14 @@ impl IntoResponse for HtmlError {
     }
 }
 
-fn build_response(doc_results: Vec<OwnedDocument>) -> Result<axum::response::Response, HtmlError> {
+fn build_response(
+    doc_results: impl IntoIterator<Item = OwnedDocument>,
+) -> Result<axum::response::Response, HtmlError> {
     let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(1024);
 
     // Build documents
     let documents: Vec<_> = doc_results
-        .iter()
+        .into_iter()
         .map(|doc| {
             let filename = builder.create_string(&doc.filename);
 
@@ -99,10 +101,27 @@ fn build_response(doc_results: Vec<OwnedDocument>) -> Result<axum::response::Res
 
 struct OwnedDocument {
     ident: u16,
-    filename: String,
+    filename: Arc<str>,
     language: common::Language,
     lines: Vec<String>,
     error_code: common::ErrorCode,
+}
+
+impl OwnedDocument {
+    fn error(
+        ident: u16,
+        filename: Arc<str>,
+        language: common::Language,
+        error_code: common::ErrorCode,
+    ) -> Self {
+        Self {
+            ident,
+            filename,
+            language,
+            lines: Vec::new(),
+            error_code,
+        }
+    }
 }
 
 fn callback(highlight: ts::Highlight, output: &mut Vec<u8>) {
@@ -112,9 +131,9 @@ fn callback(highlight: ts::Highlight, output: &mut Vec<u8>) {
     output.extend(b"\"")
 }
 
-fn parse(
+fn highlight(
     ident: u16,
-    filename: String,
+    filename: Arc<str>,
     language: &'static languages::Config,
     contents: bytes::Bytes,
     cancellation_flag: Arc<AtomicUsize>,
@@ -141,17 +160,14 @@ fn parse(
             lines,
             error_code: common::ErrorCode::NoError,
         },
-        Err(err) => OwnedDocument {
-            ident,
-            filename,
-            language: language.fb_language,
-            lines: Vec::new(),
-            error_code: match err {
+        Err(err) => {
+            let error_code = match err {
                 ts::Error::Cancelled => common::ErrorCode::Cancelled,
                 ts::Error::InvalidLanguage => common::ErrorCode::UnknownLanguage,
                 ts::Error::Unknown => common::ErrorCode::UnknownError,
-            },
-        },
+            };
+            OwnedDocument::error(ident, filename, language.fb_language, error_code)
+        }
     }
 }
 
@@ -182,77 +198,95 @@ async fn html_handler(
     let tasks: FuturesUnordered<_> = files
         .iter()
         .map(|file| {
+            // Pull out invariant values
             let ident = file.ident();
-            let filename = String::from(file.filename().unwrap_or_default());
-            let fb_language = file.language();
+            let filename: Arc<str> = Arc::from(file.filename().unwrap_or_default());
+            let language = file.language();
+
             // Bail early before spawning a task, if possible.
             if file.contents().is_none_or(|s| s.is_empty()) {
                 // We need a left_future here because Ready and Timeout<JoinHandle> are different future types,
                 // even though they end up (after some .map() calls, in the latter case) returning the same type
-                return futures::future::ready(OwnedDocument {
+                return futures::future::ready(OwnedDocument::error(
                     ident,
-                    lines: vec![],
                     filename,
-                    language: fb_language,
-                    error_code: common::ErrorCode::NoError,
-                })
+                    language,
+                    common::ErrorCode::NoError,
+                ))
                 .left_future();
             }
 
-            let language = match file.language() {
+            // Look up the configured language from languages.rs
+            let native_language = match file.language() {
                 common::Language::Unspecified => todo!(), // TODO infer language from filename
                 lang => match lang.try_into() {
                     Ok(l) => l,
                     Err(_) => {
-                        return futures::future::ready(
-                            OwnedDocument {
-                                ident,
-                                lines: vec![],
-                                filename,
-                                language: file.language(),
-                                error_code: common::ErrorCode::UnknownLanguage,
-                            }
-                        ).left_future()
-                    },
+                        return futures::future::ready(OwnedDocument::error(
+                            ident,
+                            filename,
+                            language,
+                            common::ErrorCode::UnknownLanguage,
+                        ))
+                        .left_future()
+                    }
                 },
             };
-            // Get the contents bytes - zero-copy slice from request buffer
+            // To avoid unnecessary copies, we slice out of the request body and
+            // pass that memory location down to tree-sitter-highlight.
             let slice = file.contents().unwrap().bytes();
             let offset = slice.as_ptr() as usize - body.as_ptr() as usize;
             let contents = body.slice(offset..offset + slice.len());
+
+            // Clone the cancellation flag and filename for error handlers
             let cancellation_flag = timeout_flag.clone();
             let cancellation_flag_for_timeout = cancellation_flag.clone();
+            let filename_for_join_error = filename.clone();
+            let filename_for_timeout = filename.clone();
+
+            // Spawn a blocking task for highlighting this file
             let task = tokio::task::spawn_blocking(move || {
-                parse(ident, filename, language, contents, cancellation_flag)
+                highlight(
+                    ident,
+                    filename,
+                    native_language,
+                    contents,
+                    cancellation_flag,
+                )
             })
             .map(move |t| {
-                t.unwrap_or(OwnedDocument {
-                    ident: file.ident(),
-                    lines: vec![],
-                    filename: file.filename().unwrap_or_default().to_string(),
-                    language: fb_language,
-                    error_code: common::ErrorCode::UnknownError,
+                // Fail gracefully if there was an error joining the thread
+                t.unwrap_or_else(|err| {
+                    OwnedDocument::error(
+                        ident,
+                        filename_for_join_error,
+                        language,
+                        if err.is_cancelled() {
+                            common::ErrorCode::Cancelled
+                        } else {
+                            common::ErrorCode::UnknownError
+                        },
+                    )
                 })
             });
-            let timeout_handled = tokio::time::timeout(timeout, task).map(move |result| {
+            // Run the task with the specified timeout
+            tokio::time::timeout(timeout, task).map(move |result| {
                 result.unwrap_or_else(|_elapsed| {
-                    // Timeout occurred - set cancellation flag and return timed out document
+                    // Timeout occurred - set the cancellation flag so inflight tree-sitter-side tasks
+                    // know that they should cancel and return.
                     cancellation_flag_for_timeout.store(1, Ordering::Relaxed);
-                    OwnedDocument {
-                        ident: file.ident(),
-                        lines: vec![],
-                        filename: file.filename().unwrap_or_default().to_string(),
-                        language: fb_language,
-                        error_code: common::ErrorCode::TimedOut,
-                    }
+                    OwnedDocument::error(
+                        ident,
+                        filename_for_timeout,
+                        language,
+                        common::ErrorCode::TimedOut,
+                    )
                 })
-            });
-            timeout_handled.right_future()
+            }).right_future()
         })
         .collect();
-
-    let results: Vec<OwnedDocument> = tasks.collect().await;
-    build_response(results)
+    // Wait on all in-flight tasks simultaneously with .collect() and build a response.
+    build_response(tasks.collect::<Vec<_>>().await)
 }
 
 pub async fn main(
