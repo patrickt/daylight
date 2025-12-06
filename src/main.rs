@@ -21,7 +21,7 @@ enum Commands {
     Server {
         address: std::net::SocketAddr,
 
-        #[arg(long, env = "DAYLIGHT_HIGHLIGHTER_THREADS", default_value = "8")]
+        #[arg(long, env = "DAYLIGHT_HIGHLIGHTER_THREADS", default_value = "512")]
         threads: usize,
 
         #[arg(long, env = "DAYLIGHT_PER_FILE_TIMEOUT_MS", default_value = "30000")]
