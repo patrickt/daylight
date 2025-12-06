@@ -29,14 +29,26 @@ pub mod common {
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
 pub const ENUM_MIN_LANGUAGE: u16 = 0;
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
-pub const ENUM_MAX_LANGUAGE: u16 = 3;
+pub const ENUM_MAX_LANGUAGE: u16 = 15;
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
 #[allow(non_camel_case_types)]
-pub const ENUM_VALUES_LANGUAGE: [Language; 4] = [
+pub const ENUM_VALUES_LANGUAGE: [Language; 16] = [
   Language::Unspecified,
   Language::Agda,
   Language::Bash,
   Language::C,
+  Language::Cpp,
+  Language::Css,
+  Language::Go,
+  Language::Html,
+  Language::Java,
+  Language::JavaScript,
+  Language::Json,
+  Language::Python,
+  Language::Ruby,
+  Language::Rust,
+  Language::TypeScript,
+  Language::Tsx,
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -48,14 +60,38 @@ impl Language {
   pub const Agda: Self = Self(1);
   pub const Bash: Self = Self(2);
   pub const C: Self = Self(3);
+  pub const Cpp: Self = Self(4);
+  pub const Css: Self = Self(5);
+  pub const Go: Self = Self(6);
+  pub const Html: Self = Self(7);
+  pub const Java: Self = Self(8);
+  pub const JavaScript: Self = Self(9);
+  pub const Json: Self = Self(10);
+  pub const Python: Self = Self(11);
+  pub const Ruby: Self = Self(12);
+  pub const Rust: Self = Self(13);
+  pub const TypeScript: Self = Self(14);
+  pub const Tsx: Self = Self(15);
 
   pub const ENUM_MIN: u16 = 0;
-  pub const ENUM_MAX: u16 = 3;
+  pub const ENUM_MAX: u16 = 15;
   pub const ENUM_VALUES: &'static [Self] = &[
     Self::Unspecified,
     Self::Agda,
     Self::Bash,
     Self::C,
+    Self::Cpp,
+    Self::Css,
+    Self::Go,
+    Self::Html,
+    Self::Java,
+    Self::JavaScript,
+    Self::Json,
+    Self::Python,
+    Self::Ruby,
+    Self::Rust,
+    Self::TypeScript,
+    Self::Tsx,
   ];
   /// Returns the variant's name or "" if unknown.
   pub fn variant_name(self) -> Option<&'static str> {
@@ -64,6 +100,18 @@ impl Language {
       Self::Agda => Some("Agda"),
       Self::Bash => Some("Bash"),
       Self::C => Some("C"),
+      Self::Cpp => Some("Cpp"),
+      Self::Css => Some("Css"),
+      Self::Go => Some("Go"),
+      Self::Html => Some("Html"),
+      Self::Java => Some("Java"),
+      Self::JavaScript => Some("JavaScript"),
+      Self::Json => Some("Json"),
+      Self::Python => Some("Python"),
+      Self::Ruby => Some("Ruby"),
+      Self::Rust => Some("Rust"),
+      Self::TypeScript => Some("TypeScript"),
+      Self::Tsx => Some("Tsx"),
       _ => None,
     }
   }

@@ -6,7 +6,6 @@ use axum::extract::State;
 use http::StatusCode;
 use quickcheck::TestResult;
 use quickcheck_macros::quickcheck;
-use std::sync::Arc;
 use tokio::time::Duration;
 
 // Helper to create a FlatBuffers request with given files

@@ -93,6 +93,126 @@ static C: LazyLock<Config> = LazyLock::new(|| {
     )
 });
 
+static CPP: LazyLock<Config> = LazyLock::new(|| {
+    Config::new(
+        FbLanguage::Cpp,
+        tree_sitter_cpp::LANGUAGE.into(),
+        "cpp",
+        tree_sitter_cpp::HIGHLIGHT_QUERY,
+        &["cpp", "cc", "cxx", "hpp", "hxx", "hh"],
+    )
+});
+
+static CSS: LazyLock<Config> = LazyLock::new(|| {
+    Config::new(
+        FbLanguage::Css,
+        tree_sitter_css::LANGUAGE.into(),
+        "css",
+        tree_sitter_css::HIGHLIGHTS_QUERY,
+        &["css"],
+    )
+});
+
+static GO: LazyLock<Config> = LazyLock::new(|| {
+    Config::new(
+        FbLanguage::Go,
+        tree_sitter_go::LANGUAGE.into(),
+        "go",
+        tree_sitter_go::HIGHLIGHTS_QUERY,
+        &["go"],
+    )
+});
+
+static HTML: LazyLock<Config> = LazyLock::new(|| {
+    Config::new(
+        FbLanguage::Html,
+        tree_sitter_html::LANGUAGE.into(),
+        "html",
+        tree_sitter_html::HIGHLIGHTS_QUERY,
+        &["html", "htm"],
+    )
+});
+
+static JAVA: LazyLock<Config> = LazyLock::new(|| {
+    Config::new(
+        FbLanguage::Java,
+        tree_sitter_java::LANGUAGE.into(),
+        "java",
+        tree_sitter_java::HIGHLIGHTS_QUERY,
+        &["java"],
+    )
+});
+
+static JAVASCRIPT: LazyLock<Config> = LazyLock::new(|| {
+    Config::new(
+        FbLanguage::JavaScript,
+        tree_sitter_javascript::LANGUAGE.into(),
+        "javascript",
+        tree_sitter_javascript::HIGHLIGHT_QUERY,
+        &["js", "mjs", "cjs"],
+    )
+});
+
+static JSON: LazyLock<Config> = LazyLock::new(|| {
+    Config::new(
+        FbLanguage::Json,
+        tree_sitter_json::LANGUAGE.into(),
+        "json",
+        tree_sitter_json::HIGHLIGHTS_QUERY,
+        &["json"],
+    )
+});
+
+static PYTHON: LazyLock<Config> = LazyLock::new(|| {
+    Config::new(
+        FbLanguage::Python,
+        tree_sitter_python::LANGUAGE.into(),
+        "python",
+        tree_sitter_python::HIGHLIGHTS_QUERY,
+        &["py", "pyw"],
+    )
+});
+
+static RUBY: LazyLock<Config> = LazyLock::new(|| {
+    Config::new(
+        FbLanguage::Ruby,
+        tree_sitter_ruby::LANGUAGE.into(),
+        "ruby",
+        tree_sitter_ruby::HIGHLIGHTS_QUERY,
+        &["rb"],
+    )
+});
+
+static RUST: LazyLock<Config> = LazyLock::new(|| {
+    Config::new(
+        FbLanguage::Rust,
+        tree_sitter_rust::LANGUAGE.into(),
+        "rust",
+        tree_sitter_rust::HIGHLIGHTS_QUERY,
+        &["rs"],
+    )
+});
+
+static TYPESCRIPT: LazyLock<Config> = LazyLock::new(|| {
+    Config::new(
+        FbLanguage::TypeScript,
+        tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+        "typescript",
+        tree_sitter_typescript::HIGHLIGHTS_QUERY,
+        &["ts"],
+    )
+});
+
+static TSX: LazyLock<Config> = LazyLock::new(|| {
+    Config::new(
+        FbLanguage::Tsx,
+        tree_sitter_typescript::LANGUAGE_TSX.into(),
+        "tsx",
+        tree_sitter_typescript::HIGHLIGHTS_QUERY,
+        &["tsx"],
+    )
+});
+
 static EXTENSION_MAP: LazyLock<BTreeMap<&'static str, &'static Config>> = LazyLock::new(|| {
     let mut map = BTreeMap::new();
     for lang in all_languages() {
@@ -112,7 +232,24 @@ static NAME_MAP: LazyLock<BTreeMap<&'static str, &'static Config>> = LazyLock::n
 });
 
 fn all_languages() -> impl Iterator<Item = &'static Config> {
-    [&*AGDA, &*BASH, &*C].into_iter()
+    [
+        &*AGDA,
+        &*BASH,
+        &*C,
+        &*CPP,
+        &*CSS,
+        &*GO,
+        &*HTML,
+        &*JAVA,
+        &*JAVASCRIPT,
+        &*JSON,
+        &*PYTHON,
+        &*RUBY,
+        &*RUST,
+        &*TYPESCRIPT,
+        &*TSX,
+    ]
+    .into_iter()
 }
 
 pub fn from_extension(extension: &str) -> Option<&'static Config> {
@@ -137,6 +274,18 @@ impl TryFrom<FbLanguage> for &'static Config {
             FbLanguage::Agda => Ok(&*AGDA),
             FbLanguage::Bash => Ok(&*BASH),
             FbLanguage::C => Ok(&*C),
+            FbLanguage::Cpp => Ok(&*CPP),
+            FbLanguage::Css => Ok(&*CSS),
+            FbLanguage::Go => Ok(&*GO),
+            FbLanguage::Html => Ok(&*HTML),
+            FbLanguage::Java => Ok(&*JAVA),
+            FbLanguage::JavaScript => Ok(&*JAVASCRIPT),
+            FbLanguage::Json => Ok(&*JSON),
+            FbLanguage::Python => Ok(&*PYTHON),
+            FbLanguage::Ruby => Ok(&*RUBY),
+            FbLanguage::Rust => Ok(&*RUST),
+            FbLanguage::TypeScript => Ok(&*TYPESCRIPT),
+            FbLanguage::Tsx => Ok(&*TSX),
             FbLanguage::Unspecified => Err(anyhow::anyhow!(
                 "Language::Unspecified cannot be converted to a Language"
             )),
