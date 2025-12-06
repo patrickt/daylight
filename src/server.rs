@@ -15,9 +15,9 @@ use tokio::time::Duration;
 use tree_sitter_highlight as ts;
 
 #[derive(Clone)]
-struct AppState {
-    default_per_file_timeout: Duration,
-    max_per_file_timeout: Duration,
+pub struct AppState {
+    pub default_per_file_timeout: Duration,
+    pub max_per_file_timeout: Duration,
 }
 
 #[derive(Default)]
@@ -31,7 +31,7 @@ thread_local! {
 }
 
 #[derive(Debug, Error)]
-enum HtmlError {
+pub enum HtmlError {
     #[error("Decoding request failed")]
     DecodeError(#[from] flatbuffers::InvalidFlatbuffer),
     #[error("Timeout too large (max supported: {max}ms)", max = .0.as_millis())]
@@ -99,16 +99,16 @@ fn build_response(
     Ok((StatusCode::OK, response_bytes.to_vec()).into_response())
 }
 
-struct OwnedDocument {
-    ident: u16,
-    filename: Arc<str>,
-    language: common::Language,
-    lines: Vec<String>,
-    error_code: common::ErrorCode,
+pub struct OwnedDocument {
+    pub ident: u16,
+    pub filename: Arc<str>,
+    pub language: common::Language,
+    pub lines: Vec<String>,
+    pub error_code: common::ErrorCode,
 }
 
 impl OwnedDocument {
-    fn error(
+    pub fn error(
         ident: u16,
         filename: Arc<str>,
         language: common::Language,
@@ -171,7 +171,7 @@ fn highlight(
     }
 }
 
-async fn html_handler(
+pub async fn html_handler(
     State(state): State<AppState>,
     body: Bytes,
 ) -> Result<axum::response::Response, HtmlError> {

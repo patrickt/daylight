@@ -8,6 +8,9 @@ pub mod client;
 pub mod languages;
 pub mod server;
 
+#[cfg(test)]
+mod server_tests;
+
 #[derive(Parser)]
 #[command(name = "daylight")]
 #[command(about = "Blazing-fast syntax highlighting RPC server")]
