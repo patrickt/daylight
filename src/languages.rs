@@ -6,6 +6,13 @@ use std::sync::LazyLock;
 use crate::daylight_generated::daylight::common::Language as FbLanguage;
 use tree_sitter_highlight::HighlightConfiguration;
 
+macro_rules! language {
+    ($name:ident, $fb_lang:expr, $ts_lang:expr, $lang_name:literal, $query:expr, $exts:expr) => {
+        static $name: LazyLock<Config> =
+            LazyLock::new(|| Config::new($fb_lang, $ts_lang.into(), $lang_name, $query, $exts));
+    };
+}
+
 pub static ALL_HIGHLIGHT_NAMES: [&str; 26] = [
     "attribute",
     "comment",
@@ -35,7 +42,6 @@ pub static ALL_HIGHLIGHT_NAMES: [&str; 26] = [
     "variable.parameter",
 ];
 
-
 pub struct Config {
     pub fb_language: FbLanguage,
     pub ts_config: tree_sitter_highlight::HighlightConfiguration,
@@ -51,8 +57,9 @@ impl Config {
         highlights_query: &str,
         extensions: &'static [&'static str],
     ) -> Self {
-        let mut ts_config = HighlightConfiguration::new(ts_language, name, highlights_query, "", "")
-            .expect("Tree-sitter bindings are broken");
+        let mut ts_config =
+            HighlightConfiguration::new(ts_language, name, highlights_query, "", "")
+                .expect("Tree-sitter bindings are broken");
         ts_config.configure(&ALL_HIGHLIGHT_NAMES);
         Config {
             fb_language,
@@ -63,155 +70,126 @@ impl Config {
     }
 }
 
-static AGDA: LazyLock<Config> = LazyLock::new(|| {
-    Config::new(
-        FbLanguage::Agda,
-        tree_sitter_agda::LANGUAGE.into(),
-        "agda",
-        tree_sitter_agda::HIGHLIGHTS_QUERY,
-        &["agda", "lagda"],
-    )
-});
-
-static BASH: LazyLock<Config> = LazyLock::new(|| {
-    Config::new(
-        FbLanguage::Bash,
-        tree_sitter_bash::LANGUAGE.into(),
-        "bash",
-        tree_sitter_bash::HIGHLIGHT_QUERY,
-        &["sh", "bash"],
-    )
-});
-
-static C: LazyLock<Config> = LazyLock::new(|| {
-    Config::new(
-        FbLanguage::C,
-        tree_sitter_c::LANGUAGE.into(),
-        "c",
-        tree_sitter_c::HIGHLIGHT_QUERY,
-        &["c", "h"],
-    )
-});
-
-static CPP: LazyLock<Config> = LazyLock::new(|| {
-    Config::new(
-        FbLanguage::Cpp,
-        tree_sitter_cpp::LANGUAGE.into(),
-        "cpp",
-        tree_sitter_cpp::HIGHLIGHT_QUERY,
-        &["cpp", "cc", "cxx", "hpp", "hxx", "hh"],
-    )
-});
-
-static CSS: LazyLock<Config> = LazyLock::new(|| {
-    Config::new(
-        FbLanguage::Css,
-        tree_sitter_css::LANGUAGE.into(),
-        "css",
-        tree_sitter_css::HIGHLIGHTS_QUERY,
-        &["css"],
-    )
-});
-
-static GO: LazyLock<Config> = LazyLock::new(|| {
-    Config::new(
-        FbLanguage::Go,
-        tree_sitter_go::LANGUAGE.into(),
-        "go",
-        tree_sitter_go::HIGHLIGHTS_QUERY,
-        &["go"],
-    )
-});
-
-static HTML: LazyLock<Config> = LazyLock::new(|| {
-    Config::new(
-        FbLanguage::Html,
-        tree_sitter_html::LANGUAGE.into(),
-        "html",
-        tree_sitter_html::HIGHLIGHTS_QUERY,
-        &["html", "htm"],
-    )
-});
-
-static JAVA: LazyLock<Config> = LazyLock::new(|| {
-    Config::new(
-        FbLanguage::Java,
-        tree_sitter_java::LANGUAGE.into(),
-        "java",
-        tree_sitter_java::HIGHLIGHTS_QUERY,
-        &["java"],
-    )
-});
-
-static JAVASCRIPT: LazyLock<Config> = LazyLock::new(|| {
-    Config::new(
-        FbLanguage::JavaScript,
-        tree_sitter_javascript::LANGUAGE.into(),
-        "javascript",
-        tree_sitter_javascript::HIGHLIGHT_QUERY,
-        &["js", "mjs", "cjs"],
-    )
-});
-
-static JSON: LazyLock<Config> = LazyLock::new(|| {
-    Config::new(
-        FbLanguage::Json,
-        tree_sitter_json::LANGUAGE.into(),
-        "json",
-        tree_sitter_json::HIGHLIGHTS_QUERY,
-        &["json"],
-    )
-});
-
-static PYTHON: LazyLock<Config> = LazyLock::new(|| {
-    Config::new(
-        FbLanguage::Python,
-        tree_sitter_python::LANGUAGE.into(),
-        "python",
-        tree_sitter_python::HIGHLIGHTS_QUERY,
-        &["py", "pyw"],
-    )
-});
-
-static RUBY: LazyLock<Config> = LazyLock::new(|| {
-    Config::new(
-        FbLanguage::Ruby,
-        tree_sitter_ruby::LANGUAGE.into(),
-        "ruby",
-        tree_sitter_ruby::HIGHLIGHTS_QUERY,
-        &["rb"],
-    )
-});
-
-static RUST: LazyLock<Config> = LazyLock::new(|| {
-    Config::new(
-        FbLanguage::Rust,
-        tree_sitter_rust::LANGUAGE.into(),
-        "rust",
-        tree_sitter_rust::HIGHLIGHTS_QUERY,
-        &["rs"],
-    )
-});
-
-static TYPESCRIPT: LazyLock<Config> = LazyLock::new(|| {
-    Config::new(
-        FbLanguage::TypeScript,
-        tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-        "typescript",
-        tree_sitter_typescript::HIGHLIGHTS_QUERY,
-        &["ts"],
-    )
-});
-
-static TSX: LazyLock<Config> = LazyLock::new(|| {
-    Config::new(
-        FbLanguage::Tsx,
-        tree_sitter_typescript::LANGUAGE_TSX.into(),
-        "tsx",
-        tree_sitter_typescript::HIGHLIGHTS_QUERY,
-        &["tsx"],
-    )
-});
+language!(
+    AGDA,
+    FbLanguage::Agda,
+    tree_sitter_agda::LANGUAGE,
+    "agda",
+    tree_sitter_agda::HIGHLIGHTS_QUERY,
+    &["agda", "lagda"]
+);
+language!(
+    BASH,
+    FbLanguage::Bash,
+    tree_sitter_bash::LANGUAGE,
+    "bash",
+    tree_sitter_bash::HIGHLIGHT_QUERY,
+    &["sh", "bash"]
+);
+language!(
+    C,
+    FbLanguage::C,
+    tree_sitter_c::LANGUAGE,
+    "c",
+    tree_sitter_c::HIGHLIGHT_QUERY,
+    &["c", "h"]
+);
+language!(
+    CPP,
+    FbLanguage::Cpp,
+    tree_sitter_cpp::LANGUAGE,
+    "cpp",
+    tree_sitter_cpp::HIGHLIGHT_QUERY,
+    &["cpp", "cc", "cxx", "hpp", "hxx", "hh"]
+);
+language!(
+    CSS,
+    FbLanguage::Css,
+    tree_sitter_css::LANGUAGE,
+    "css",
+    tree_sitter_css::HIGHLIGHTS_QUERY,
+    &["css"]
+);
+language!(
+    GO,
+    FbLanguage::Go,
+    tree_sitter_go::LANGUAGE,
+    "go",
+    tree_sitter_go::HIGHLIGHTS_QUERY,
+    &["go"]
+);
+language!(
+    HTML,
+    FbLanguage::Html,
+    tree_sitter_html::LANGUAGE,
+    "html",
+    tree_sitter_html::HIGHLIGHTS_QUERY,
+    &["html", "htm"]
+);
+language!(
+    JAVA,
+    FbLanguage::Java,
+    tree_sitter_java::LANGUAGE,
+    "java",
+    tree_sitter_java::HIGHLIGHTS_QUERY,
+    &["java"]
+);
+language!(
+    JAVASCRIPT,
+    FbLanguage::JavaScript,
+    tree_sitter_javascript::LANGUAGE,
+    "javascript",
+    tree_sitter_javascript::HIGHLIGHT_QUERY,
+    &["js", "mjs", "cjs"]
+);
+language!(
+    JSON,
+    FbLanguage::Json,
+    tree_sitter_json::LANGUAGE,
+    "json",
+    tree_sitter_json::HIGHLIGHTS_QUERY,
+    &["json"]
+);
+language!(
+    PYTHON,
+    FbLanguage::Python,
+    tree_sitter_python::LANGUAGE,
+    "python",
+    tree_sitter_python::HIGHLIGHTS_QUERY,
+    &["py", "pyw"]
+);
+language!(
+    RUBY,
+    FbLanguage::Ruby,
+    tree_sitter_ruby::LANGUAGE,
+    "ruby",
+    tree_sitter_ruby::HIGHLIGHTS_QUERY,
+    &["rb"]
+);
+language!(
+    RUST,
+    FbLanguage::Rust,
+    tree_sitter_rust::LANGUAGE,
+    "rust",
+    tree_sitter_rust::HIGHLIGHTS_QUERY,
+    &["rs"]
+);
+language!(
+    TYPESCRIPT,
+    FbLanguage::TypeScript,
+    tree_sitter_typescript::LANGUAGE_TYPESCRIPT,
+    "typescript",
+    tree_sitter_typescript::HIGHLIGHTS_QUERY,
+    &["ts"]
+);
+language!(
+    TSX,
+    FbLanguage::Tsx,
+    tree_sitter_typescript::LANGUAGE_TSX,
+    "tsx",
+    tree_sitter_typescript::HIGHLIGHTS_QUERY,
+    &["tsx"]
+);
 
 static EXTENSION_MAP: LazyLock<BTreeMap<&'static str, &'static Config>> = LazyLock::new(|| {
     let mut map = BTreeMap::new();
