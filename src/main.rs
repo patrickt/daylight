@@ -21,11 +21,14 @@ enum Commands {
     Server {
         address: std::net::SocketAddr,
 
-        #[arg(long, env = "DAYLIGHT_HIGHLIGHTER_THREADS", default_value = "512")]
+        #[arg(long, env = "DAYLIGHT_WORKER_THREADS", default_value = "512")]
         threads: usize,
 
-        #[arg(long, env = "DAYLIGHT_PER_FILE_TIMEOUT_MS", default_value = "30000")]
-        timeout_ms: u64,
+        #[arg(long, env = "DAYLIGHT_DEFAULT_PER_FILE_TIMEOUT_MS", default_value = "30000")]
+        default_timeout_ms: u64,
+
+        #[arg(long, env = "DAYLIGHT_MAX_PER_FILE_TIMEOUT_MS", default_value = "60000")]
+        max_timeout_ms: u64,
     },
     /// Run the client
     Client {
@@ -43,7 +46,8 @@ fn main() -> anyhow::Result<()> {
         Commands::Server {
             address,
             threads,
-            timeout_ms,
+            default_timeout_ms,
+            max_timeout_ms,
         } => {
             // Build runtime with custom blocking thread pool size
             let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -51,8 +55,9 @@ fn main() -> anyhow::Result<()> {
                 .enable_all()
                 .build()?;
 
-            let timeout = std::time::Duration::from_millis(timeout_ms);
-            runtime.block_on(server::main(timeout, address))
+            let default_timeout = tokio::time::Duration::from_millis(default_timeout_ms);
+            let max_timeout = tokio::time::Duration::from_millis(max_timeout_ms);
+            runtime.block_on(server::main(default_timeout, max_timeout, address))
         }
         Commands::Client {
             language,

@@ -8,10 +8,11 @@ enum Language : uint16 {
 }
 
 enum ErrorCode : byte {
-  Unspecified = 0,
+  NoError = 0,
   TimedOut = 1,
   Cancelled = 2,
   UnknownLanguage = 3,
+  UnknownError = 4,
 }
 
 namespace daylight.html;
@@ -45,11 +46,8 @@ table Request {
 
 /// A response containing either highlighted documents or failures.
 /// Both documents and failures can appear in any order, regardless of how they were ordered in the request.
-/// Use their .ident properties to build a mapping between request and response.
-/// Invariant: len(documents) + len(failures) = len(request.files) iff no idents are duplicated.
 table Response {
   documents: [Document];
-  failures: [Failure];
 }
 
 /// A successfully highlighted document.
@@ -60,14 +58,8 @@ table Document {
   filename: string;
   /// The language that was used or inferred for this file.
   language: daylight.common.Language;
-  /// Lines of HTML.
+  /// Lines of HTML. If `error_code` is not NoError, this will be empty.
   lines: [string];
-}
-
-/// A document that failed to highlight.
-table Failure {
-  /// The ident corresponding to the File that produced this highlighted failure.
-  ident: uint16;
-  /// An error code describing the nature of this failure.
-  reason: daylight.common.ErrorCode;
+  /// If no error occurred, the code will be NoError. Natch.
+  error_code: daylight.common.ErrorCode;
 }

@@ -67,6 +67,12 @@ pub async fn main(address: SocketAddr, language: &'static Config, path: PathBuf)
         if documents.len() > 0 {
             let doc = documents.get(0);
 
+            // Check for errors
+            let error_code = doc.error_code();
+            if error_code.0 != 0 {  // NoError = 0
+                anyhow::bail!("Highlighting failed with error code: {:?}", error_code);
+            }
+
             // Collect all lines into a single string
             let mut html_content = String::new();
             if let Some(lines) = doc.lines() {
@@ -81,15 +87,6 @@ pub async fn main(address: SocketAddr, language: &'static Config, path: PathBuf)
             let output_path = format!("/tmp/{}.html", filename);
             std::fs::write(&output_path, html_content)?;
             println!("Wrote highlighted output to: {}", output_path);
-        }
-    }
-
-    // Check for failures
-    if let Some(failures) = fb_response.failures() {
-        if failures.len() > 0 {
-            let failure = failures.get(0);
-            let reason = failure.reason();
-            anyhow::bail!("Highlighting failed with reason: {:?}", reason);
         }
     }
 

@@ -122,14 +122,15 @@ impl flatbuffers::SimpleToVerifyInSlice for Language {}
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
 pub const ENUM_MIN_ERROR_CODE: i8 = 0;
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
-pub const ENUM_MAX_ERROR_CODE: i8 = 3;
+pub const ENUM_MAX_ERROR_CODE: i8 = 4;
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
 #[allow(non_camel_case_types)]
-pub const ENUM_VALUES_ERROR_CODE: [ErrorCode; 4] = [
-  ErrorCode::Unspecified,
+pub const ENUM_VALUES_ERROR_CODE: [ErrorCode; 5] = [
+  ErrorCode::NoError,
   ErrorCode::TimedOut,
   ErrorCode::Cancelled,
   ErrorCode::UnknownLanguage,
+  ErrorCode::UnknownError,
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -137,26 +138,29 @@ pub const ENUM_VALUES_ERROR_CODE: [ErrorCode; 4] = [
 pub struct ErrorCode(pub i8);
 #[allow(non_upper_case_globals)]
 impl ErrorCode {
-  pub const Unspecified: Self = Self(0);
+  pub const NoError: Self = Self(0);
   pub const TimedOut: Self = Self(1);
   pub const Cancelled: Self = Self(2);
   pub const UnknownLanguage: Self = Self(3);
+  pub const UnknownError: Self = Self(4);
 
   pub const ENUM_MIN: i8 = 0;
-  pub const ENUM_MAX: i8 = 3;
+  pub const ENUM_MAX: i8 = 4;
   pub const ENUM_VALUES: &'static [Self] = &[
-    Self::Unspecified,
+    Self::NoError,
     Self::TimedOut,
     Self::Cancelled,
     Self::UnknownLanguage,
+    Self::UnknownError,
   ];
   /// Returns the variant's name or "" if unknown.
   pub fn variant_name(self) -> Option<&'static str> {
     match self {
-      Self::Unspecified => Some("Unspecified"),
+      Self::NoError => Some("NoError"),
       Self::TimedOut => Some("TimedOut"),
       Self::Cancelled => Some("Cancelled"),
       Self::UnknownLanguage => Some("UnknownLanguage"),
+      Self::UnknownError => Some("UnknownError"),
       _ => None,
     }
   }
@@ -521,8 +525,6 @@ pub enum ResponseOffset {}
 
 /// A response containing either highlighted documents or failures.
 /// Both documents and failures can appear in any order, regardless of how they were ordered in the request.
-/// Use their .ident properties to build a mapping between request and response.
-/// Invariant: len(documents) + len(failures) = len(request.files) iff no idents are duplicated.
 pub struct Response<'a> {
   pub _tab: flatbuffers::Table<'a>,
 }
@@ -537,7 +539,6 @@ impl<'a> flatbuffers::Follow<'a> for Response<'a> {
 
 impl<'a> Response<'a> {
   pub const VT_DOCUMENTS: flatbuffers::VOffsetT = 4;
-  pub const VT_FAILURES: flatbuffers::VOffsetT = 6;
 
   #[inline]
   pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
@@ -549,7 +550,6 @@ impl<'a> Response<'a> {
     args: &'args ResponseArgs<'args>
   ) -> flatbuffers::WIPOffset<Response<'bldr>> {
     let mut builder = ResponseBuilder::new(_fbb);
-    if let Some(x) = args.failures { builder.add_failures(x); }
     if let Some(x) = args.documents { builder.add_documents(x); }
     builder.finish()
   }
@@ -562,13 +562,6 @@ impl<'a> Response<'a> {
     // which contains a valid value in this slot
     unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<Document>>>>(Response::VT_DOCUMENTS, None)}
   }
-  #[inline]
-  pub fn failures(&self) -> Option<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<Failure<'a>>>> {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<Failure>>>>(Response::VT_FAILURES, None)}
-  }
 }
 
 impl flatbuffers::Verifiable for Response<'_> {
@@ -579,21 +572,18 @@ impl flatbuffers::Verifiable for Response<'_> {
     use self::flatbuffers::Verifiable;
     v.visit_table(pos)?
      .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<Document>>>>("documents", Self::VT_DOCUMENTS, false)?
-     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<Failure>>>>("failures", Self::VT_FAILURES, false)?
      .finish();
     Ok(())
   }
 }
 pub struct ResponseArgs<'a> {
     pub documents: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<Document<'a>>>>>,
-    pub failures: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<Failure<'a>>>>>,
 }
 impl<'a> Default for ResponseArgs<'a> {
   #[inline]
   fn default() -> Self {
     ResponseArgs {
       documents: None,
-      failures: None,
     }
   }
 }
@@ -606,10 +596,6 @@ impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> ResponseBuilder<'a, 'b, A> {
   #[inline]
   pub fn add_documents(&mut self, documents: flatbuffers::WIPOffset<flatbuffers::Vector<'b , flatbuffers::ForwardsUOffset<Document<'b >>>>) {
     self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(Response::VT_DOCUMENTS, documents);
-  }
-  #[inline]
-  pub fn add_failures(&mut self, failures: flatbuffers::WIPOffset<flatbuffers::Vector<'b , flatbuffers::ForwardsUOffset<Failure<'b >>>>) {
-    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(Response::VT_FAILURES, failures);
   }
   #[inline]
   pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> ResponseBuilder<'a, 'b, A> {
@@ -630,7 +616,6 @@ impl core::fmt::Debug for Response<'_> {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     let mut ds = f.debug_struct("Response");
       ds.field("documents", &self.documents());
-      ds.field("failures", &self.failures());
       ds.finish()
   }
 }
@@ -655,6 +640,7 @@ impl<'a> Document<'a> {
   pub const VT_FILENAME: flatbuffers::VOffsetT = 6;
   pub const VT_LANGUAGE: flatbuffers::VOffsetT = 8;
   pub const VT_LINES: flatbuffers::VOffsetT = 10;
+  pub const VT_ERROR_CODE: flatbuffers::VOffsetT = 12;
 
   #[inline]
   pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
@@ -670,6 +656,7 @@ impl<'a> Document<'a> {
     if let Some(x) = args.filename { builder.add_filename(x); }
     builder.add_language(args.language);
     builder.add_ident(args.ident);
+    builder.add_error_code(args.error_code);
     builder.finish()
   }
 
@@ -698,13 +685,21 @@ impl<'a> Document<'a> {
     // which contains a valid value in this slot
     unsafe { self._tab.get::<super::common::Language>(Document::VT_LANGUAGE, Some(super::common::Language::Unspecified)).unwrap()}
   }
-  /// Lines of HTML.
+  /// Lines of HTML. If `error_code` is not NoError, this will be empty.
   #[inline]
   pub fn lines(&self) -> Option<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<&'a str>>> {
     // Safety:
     // Created from valid Table for this object
     // which contains a valid value in this slot
     unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<&'a str>>>>(Document::VT_LINES, None)}
+  }
+  /// If no error occurred, the code will be NoError. Natch.
+  #[inline]
+  pub fn error_code(&self) -> super::common::ErrorCode {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<super::common::ErrorCode>(Document::VT_ERROR_CODE, Some(super::common::ErrorCode::NoError)).unwrap()}
   }
 }
 
@@ -719,6 +714,7 @@ impl flatbuffers::Verifiable for Document<'_> {
      .visit_field::<flatbuffers::ForwardsUOffset<&str>>("filename", Self::VT_FILENAME, false)?
      .visit_field::<super::common::Language>("language", Self::VT_LANGUAGE, false)?
      .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<&'_ str>>>>("lines", Self::VT_LINES, false)?
+     .visit_field::<super::common::ErrorCode>("error_code", Self::VT_ERROR_CODE, false)?
      .finish();
     Ok(())
   }
@@ -728,6 +724,7 @@ pub struct DocumentArgs<'a> {
     pub filename: Option<flatbuffers::WIPOffset<&'a str>>,
     pub language: super::common::Language,
     pub lines: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<&'a str>>>>,
+    pub error_code: super::common::ErrorCode,
 }
 impl<'a> Default for DocumentArgs<'a> {
   #[inline]
@@ -737,6 +734,7 @@ impl<'a> Default for DocumentArgs<'a> {
       filename: None,
       language: super::common::Language::Unspecified,
       lines: None,
+      error_code: super::common::ErrorCode::NoError,
     }
   }
 }
@@ -763,6 +761,10 @@ impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> DocumentBuilder<'a, 'b, A> {
     self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(Document::VT_LINES, lines);
   }
   #[inline]
+  pub fn add_error_code(&mut self, error_code: super::common::ErrorCode) {
+    self.fbb_.push_slot::<super::common::ErrorCode>(Document::VT_ERROR_CODE, error_code, super::common::ErrorCode::NoError);
+  }
+  #[inline]
   pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> DocumentBuilder<'a, 'b, A> {
     let start = _fbb.start_table();
     DocumentBuilder {
@@ -784,123 +786,7 @@ impl core::fmt::Debug for Document<'_> {
       ds.field("filename", &self.filename());
       ds.field("language", &self.language());
       ds.field("lines", &self.lines());
-      ds.finish()
-  }
-}
-pub enum FailureOffset {}
-#[derive(Copy, Clone, PartialEq)]
-
-/// A document that failed to highlight.
-pub struct Failure<'a> {
-  pub _tab: flatbuffers::Table<'a>,
-}
-
-impl<'a> flatbuffers::Follow<'a> for Failure<'a> {
-  type Inner = Failure<'a>;
-  #[inline]
-  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-    Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
-  }
-}
-
-impl<'a> Failure<'a> {
-  pub const VT_IDENT: flatbuffers::VOffsetT = 4;
-  pub const VT_REASON: flatbuffers::VOffsetT = 6;
-
-  #[inline]
-  pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
-    Failure { _tab: table }
-  }
-  #[allow(unused_mut)]
-  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: flatbuffers::Allocator + 'bldr>(
-    _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
-    args: &'args FailureArgs
-  ) -> flatbuffers::WIPOffset<Failure<'bldr>> {
-    let mut builder = FailureBuilder::new(_fbb);
-    builder.add_ident(args.ident);
-    builder.add_reason(args.reason);
-    builder.finish()
-  }
-
-
-  /// The ident corresponding to the File that produced this highlighted failure.
-  #[inline]
-  pub fn ident(&self) -> u16 {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<u16>(Failure::VT_IDENT, Some(0)).unwrap()}
-  }
-  /// An error code describing the nature of this failure.
-  #[inline]
-  pub fn reason(&self) -> super::common::ErrorCode {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<super::common::ErrorCode>(Failure::VT_REASON, Some(super::common::ErrorCode::Unspecified)).unwrap()}
-  }
-}
-
-impl flatbuffers::Verifiable for Failure<'_> {
-  #[inline]
-  fn run_verifier(
-    v: &mut flatbuffers::Verifier, pos: usize
-  ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
-    use self::flatbuffers::Verifiable;
-    v.visit_table(pos)?
-     .visit_field::<u16>("ident", Self::VT_IDENT, false)?
-     .visit_field::<super::common::ErrorCode>("reason", Self::VT_REASON, false)?
-     .finish();
-    Ok(())
-  }
-}
-pub struct FailureArgs {
-    pub ident: u16,
-    pub reason: super::common::ErrorCode,
-}
-impl<'a> Default for FailureArgs {
-  #[inline]
-  fn default() -> Self {
-    FailureArgs {
-      ident: 0,
-      reason: super::common::ErrorCode::Unspecified,
-    }
-  }
-}
-
-pub struct FailureBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
-  fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
-  start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
-}
-impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> FailureBuilder<'a, 'b, A> {
-  #[inline]
-  pub fn add_ident(&mut self, ident: u16) {
-    self.fbb_.push_slot::<u16>(Failure::VT_IDENT, ident, 0);
-  }
-  #[inline]
-  pub fn add_reason(&mut self, reason: super::common::ErrorCode) {
-    self.fbb_.push_slot::<super::common::ErrorCode>(Failure::VT_REASON, reason, super::common::ErrorCode::Unspecified);
-  }
-  #[inline]
-  pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> FailureBuilder<'a, 'b, A> {
-    let start = _fbb.start_table();
-    FailureBuilder {
-      fbb_: _fbb,
-      start_: start,
-    }
-  }
-  #[inline]
-  pub fn finish(self) -> flatbuffers::WIPOffset<Failure<'a>> {
-    let o = self.fbb_.end_table(self.start_);
-    flatbuffers::WIPOffset::new(o.value())
-  }
-}
-
-impl core::fmt::Debug for Failure<'_> {
-  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-    let mut ds = f.debug_struct("Failure");
-      ds.field("ident", &self.ident());
-      ds.field("reason", &self.reason());
+      ds.field("error_code", &self.error_code());
       ds.finish()
   }
 }

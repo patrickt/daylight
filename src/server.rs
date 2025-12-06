@@ -1,31 +1,23 @@
-use axum::{
-    body::Bytes,
-    extract::State,
-    http::StatusCode,
-    response::{IntoResponse, Response},
-    routing::post,
-    Router,
-};
 use std::cell::RefCell;
 use std::net::SocketAddr;
-use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::thread_local;
-use std::time::Duration;
-use thiserror::Error;
-use tree_sitter_highlight as ts;
 
-use crate::daylight_generated::daylight::common::{ErrorCode, Language};
-use crate::daylight_generated::daylight::html::{
-    Document, DocumentArgs, Failure, FailureArgs,
-    Request, Response as FbResponse, ResponseArgs,
-};
-use crate::languages as lang;
+use axum::{Router, routing::post, body::Bytes, extract::State, response::IntoResponse};
+use futures::{FutureExt, StreamExt};
+use futures::{future::Ready, stream::FuturesUnordered};
+use http::StatusCode;
+use thiserror::Error;
+use tokio::time::Duration;
+use tree_sitter_highlight as ts;
+use crate::daylight_generated::daylight::common::{self};
+use crate::daylight_generated::daylight::html;
+use crate::languages;
 
 #[derive(Clone)]
 struct AppState {
     default_per_file_timeout: Duration,
+    max_per_file_timeout: Duration,
 }
 
 #[derive(Default)]
@@ -34,66 +26,34 @@ struct ThreadState {
     renderer: ts::HtmlRenderer,
 }
 
+
 thread_local! {
     pub static PER_THREAD: RefCell<ThreadState> = RefCell::default();
 }
 
-#[derive(Error, Debug)]
-enum HighlightError {
-    #[error("highlighting failed: {0}")]
-    TreeSitter(#[from] tree_sitter_highlight::Error),
-    #[error("unknown language")]
-    UnknownLanguage,
-    #[error("invalid request: {0}")]
-    InvalidRequest(String),
-    #[error("internal error: {0}")]
+#[derive(Debug, Error)]
+enum HtmlError {
+    #[error("Decoding request failed")]
+    DecodeError(#[from] flatbuffers::InvalidFlatbuffer),
+    #[error("Timeout too large (max supported: {max}ms)", max = .0.as_millis())]
+    TimeoutTooLarge(Duration),
+    #[error("Internal service error: {0}")]
+    #[allow(dead_code)]
     Internal(String),
 }
 
-impl HighlightError {
-    fn as_code(&self) -> ErrorCode {
-        match self {
-            Self::TreeSitter(tserr) => match tserr {
-                ts::Error::Cancelled => ErrorCode::Cancelled,
-                ts::Error::InvalidLanguage => ErrorCode::UnknownLanguage,
-                ts::Error::Unknown => ErrorCode::Unspecified,
-            },
-            Self::UnknownLanguage => ErrorCode::UnknownLanguage,
-            Self::InvalidRequest(_) | Self::Internal(_) => ErrorCode::Unspecified,
-        }
+impl IntoResponse for HtmlError {
+    fn into_response(self) -> axum::response::Response {
+        use HtmlError::*;
+        let code = match self {
+            Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            _ => StatusCode::BAD_REQUEST,
+        };
+        (code, self.to_string()).into_response()
     }
 }
 
-struct DocumentResult {
-    ident: u16,
-    filename: String,
-    language: Language,
-    lines: Vec<String>,
-}
-
-struct FailureResult {
-    ident: u16,
-    reason: HighlightError,
-}
-
-fn callback(highlight: ts::Highlight, output: &mut Vec<u8>) {
-    let kind = lang::ALL_HIGHLIGHT_NAMES[highlight.0];
-    output.extend(b"class=\"");
-    output.extend(kind.as_bytes().iter());
-    output.extend(b"\"")
-}
-
-// Helper to create zero-copy Bytes slice from FlatBuffers vector
-fn slice_from_vector(buffer: &Bytes, slice: &[u8]) -> Bytes {
-    let offset = slice.as_ptr() as usize - buffer.as_ptr() as usize;
-    buffer.slice(offset..offset + slice.len())
-}
-
-// Build FlatBuffers response from results
-fn build_response(
-    doc_results: Vec<DocumentResult>,
-    failure_results: Vec<FailureResult>,
-) -> Result<Response, HighlightError> {
+fn build_response(doc_results: Vec<OwnedDocument>) -> Result<axum::response::Response, HtmlError> {
     let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(1024);
 
     // Build documents
@@ -108,13 +68,14 @@ fn build_response(
                 .collect();
             let lines_vec = builder.create_vector(&lines);
 
-            Document::create(
+            html::Document::create(
                 &mut builder,
-                &DocumentArgs {
+                &html::DocumentArgs {
                     ident: doc.ident,
                     filename: Some(filename),
                     language: doc.language,
                     lines: Some(lines_vec),
+                    error_code: doc.error_code,
                 },
             )
         })
@@ -122,28 +83,11 @@ fn build_response(
 
     let documents_vec = builder.create_vector(&documents);
 
-    // Build failures
-    let failures: Vec<_> = failure_results
-        .iter()
-        .map(|failure| {
-            Failure::create(
-                &mut builder,
-                &FailureArgs {
-                    ident: failure.ident,
-                    reason: failure.reason.as_code(),
-                },
-            )
-        })
-        .collect();
-
-    let failures_vec = builder.create_vector(&failures);
-
     // Build response
-    let fb_response = FbResponse::create(
+    let fb_response = html::Response::create(
         &mut builder,
-        &ResponseArgs {
+        &html::ResponseArgs {
             documents: Some(documents_vec),
-            failures: Some(failures_vec),
         },
     );
 
@@ -153,45 +97,66 @@ fn build_response(
     Ok((StatusCode::OK, response_bytes.to_vec()).into_response())
 }
 
+struct OwnedDocument {
+    ident: u16,
+    filename: String,
+    language: common::Language,
+    lines: Vec<String>,
+    error_code: common::ErrorCode,
+}
+
+fn callback(highlight: ts::Highlight, output: &mut Vec<u8>) {
+    let kind = languages::ALL_HIGHLIGHT_NAMES[highlight.0];
+    output.extend(b"class=\"");
+    output.extend(kind.as_bytes().iter());
+    output.extend(b"\"")
+}
+
 fn parse(
     ident: u16,
     filename: String,
-    language: &'static lang::Config,
+    language: &'static languages::Config,
     contents: bytes::Bytes,
     cancellation_flag: Arc<AtomicUsize>,
-) -> Result<DocumentResult, FailureResult> {
-    PER_THREAD
-        .with_borrow_mut(|pt| {
-            let iter = pt.highlighter.highlight(
-                &language.ts_config,
-                &contents, // Zero-copy: Bytes derefs to &[u8]
-                Some(&cancellation_flag),
-                |_| None,
-            )?;
+) -> OwnedDocument {
+    let result = PER_THREAD.with_borrow_mut(|pt| {
+        let iter = pt.highlighter.highlight(
+            &language.ts_config,
+            &contents, // Zero-copy: Bytes derefs to &[u8]
+            Some(&cancellation_flag),
+            |_| None,
+        )?;
 
-            pt.renderer.reset();
-            pt.renderer.render(iter, &contents, &callback)?;
+        pt.renderer.reset();
+        pt.renderer.render(iter, &contents, &callback)?;
 
-            Ok(DocumentResult {
-                ident,
-                filename,
-                language: language.fb_language,
-                lines: pt.renderer.lines().map(String::from).collect(),
-            })
-        })
-        .map_err(|err| FailureResult {
+        Ok::<_, tree_sitter_highlight::Error>(pt.renderer.lines().map(String::from).collect())
+    });
+
+    match result {
+        Ok(lines) => OwnedDocument {
             ident,
-            reason: HighlightError::TreeSitter(err),
-        })
+            filename,
+            language: language.fb_language,
+            lines,
+            error_code: common::ErrorCode::NoError,
+        },
+        Err(err) => OwnedDocument {
+            ident,
+            filename,
+            language: language.fb_language,
+            lines: Vec::new(),
+            error_code: match err {
+                ts::Error::Cancelled => common::ErrorCode::Cancelled,
+                ts::Error::InvalidLanguage => common::ErrorCode::UnknownLanguage,
+                ts::Error::Unknown => common::ErrorCode::UnknownError,
+            },
+        },
+    }
 }
 
-// Handler for the /v1/html endpoint
-async fn html_handler(
-    State(state): State<AppState>,
-    body: Bytes,
-) -> Result<Response, HighlightError> {
-    let request = flatbuffers::root::<Request>(&body)
-        .map_err(|e| HighlightError::InvalidRequest(e.to_string()))?;
+async fn html_handler(State(state): State<AppState>, body: Bytes) -> Result<axum::response::Response, HtmlError> {
+    let request = flatbuffers::root::<html::Request>(&body)?;
 
     let timeout_ms = request.timeout_ms();
     let timeout = if timeout_ms == 0 {
@@ -199,101 +164,77 @@ async fn html_handler(
     } else {
         Duration::from_millis(timeout_ms)
     };
+    if timeout > state.max_per_file_timeout {
+        Err(HtmlError::TimeoutTooLarge(state.max_per_file_timeout))?
+    }
+    let timeout_flag: Arc<AtomicUsize> = Arc::default();
 
-    let files = request.files().ok_or_else(|| HighlightError::InvalidRequest("No files provided".to_string()))?;
-
+    let files = request.files().unwrap_or_default();
     if files.is_empty() {
-        return build_response(vec![], vec![]);
+        return build_response(vec![]);
     }
 
-    // Spawn a blocking task for each file
-    let tasks = files
-        .iter()
-        .map(|file| {
-            let ident = file.ident();
-            let filename = file.filename()
-                .ok_or_else(|| HighlightError::InvalidRequest("Missing filename".to_string()))?
-                .to_string();
-
-            // Try to get language from request, otherwise infer from filename
-            let language = match file.language() {
-                Language::Unspecified => lang::from_path(Path::new(&filename))
-                    .ok_or(HighlightError::UnknownLanguage)?,
-                lang => lang.try_into()?,
+    let tasks: FuturesUnordered<futures::future::Either<Ready<OwnedDocument>, _>> =
+        files.iter().map(|file| {
+            let mut failure = OwnedDocument {
+                ident: file.ident(),
+                lines: vec![],
+                filename: file.filename().unwrap_or_default().to_string(),
+                language: file.language(),
+                error_code: common::ErrorCode::NoError,
             };
-
-            // Get the contents bytes - zero-copy slice from request buffer
-            let contents_slice = file.contents()
-                .ok_or_else(|| HighlightError::InvalidRequest("Missing file contents".to_string()))?
+            if file.contents().is_none_or(|s| s.is_empty()) {
+                return futures::future::ready(failure).left_future()
+            }
+            let ident = file.ident();
+            let filename = String::from(file.filename().unwrap_or_default());
+            let language = match file.language() {
+                common::Language::Unspecified => todo!(),
+                lang => lang.try_into().unwrap(),
+            };
+           // Get the contents bytes - zero-copy slice from request buffer
+            let slice = file.contents()
+                .unwrap()
                 .bytes();
-            let contents = slice_from_vector(&body, contents_slice);
-
-            // Create cancellation flag for this file
-            let cancellation_flag = Arc::new(AtomicUsize::new(0));
-            let cancel_clone = cancellation_flag.clone();
-
-            // Spawn blocking task for this file with timeout
+            let offset = slice.as_ptr() as usize - body.as_ptr() as usize;
+            let contents = body.slice(offset..offset + slice.len());
+            let cancellation_flag = timeout_flag.clone();
+            let cancellation_flag_for_timeout = cancellation_flag.clone();
             let task = tokio::task::spawn_blocking(move || {
                 parse(ident, filename, language, contents, cancellation_flag)
+            }).map(move |t| {
+                t.unwrap_or(OwnedDocument {
+                    ident: file.ident(),
+                    lines: vec![],
+                    filename: file.filename().unwrap_or_default().to_string(),
+                    language: file.language(),
+                    error_code: common::ErrorCode::UnknownError,
+                })
             });
+            let to = tokio::time::timeout(timeout, task);
+            let timeout_handled = to.map(move |result| {
+                result.unwrap_or_else(|_elapsed| {
+                    // Timeout occurred - set cancellation flag and return timed out document
+                    cancellation_flag_for_timeout.store(1, Ordering::Relaxed);
+                    failure.error_code = common::ErrorCode::TimedOut;
+                    failure
+                })
+            });
+            timeout_handled.right_future()
+        }).collect();
 
-            Ok(async move {
-                // Race the task against the timeout
-                match tokio::time::timeout(timeout, task).await {
-                    Ok(result) => result,
-                    Err(_) => {
-                        // Timeout occurred - signal cancellation to tree-sitter
-                        cancel_clone.store(1, Ordering::Relaxed);
-                        Ok(Err(FailureResult {
-                            ident,
-                            reason: HighlightError::TreeSitter(tree_sitter_highlight::Error::Cancelled),
-                        }))
-                    }
-                }
-            })
-        })
-        .collect::<Result<Vec<_>, HighlightError>>()?;
-
-    // Wait for all tasks to complete
-
-    let results = futures::future::join_all(tasks).await;
-
-    // Partition into failures and successes
-    let mut failure_results = Vec::new();
-    let mut doc_results = Vec::new();
-
-    for result in results {
-        match result {
-            Ok(Ok(doc)) => doc_results.push(doc),
-            Ok(Err(failure)) => failure_results.push(failure),
-            Err(e) => return Err(HighlightError::Internal(format!("Task join error: {}", e))),
-        }
-    }
-
-    build_response(doc_results, failure_results)
+    let results: Vec<OwnedDocument> = tasks.collect().await;
+    build_response(results)
 }
 
-impl From<anyhow::Error> for HighlightError {
-    fn from(err: anyhow::Error) -> Self {
-        HighlightError::Internal(err.to_string())
-    }
-}
-
-impl IntoResponse for HighlightError {
-    fn into_response(self) -> Response {
-        let (status, message) = match self {
-            HighlightError::InvalidRequest(msg) => (StatusCode::BAD_REQUEST, msg),
-            HighlightError::TreeSitter(_) | HighlightError::UnknownLanguage | HighlightError::Internal(_) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, self.to_string())
-            }
-        };
-        (status, message).into_response()
-    }
-}
-
-pub async fn main(default_timeout: Duration, addr: SocketAddr) -> anyhow::Result<()> {
+pub async fn main(
+    default_per_file_timeout: Duration,
+    max_per_file_timeout: Duration,
+    addr: SocketAddr,
+) -> anyhow::Result<()> {
     let state = AppState {
-        default_per_file_timeout: default_timeout,
+        default_per_file_timeout,
+        max_per_file_timeout,
     };
 
     let app = Router::new()

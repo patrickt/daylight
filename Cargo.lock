@@ -257,6 +257,7 @@ dependencies = [
  "clap",
  "flatbuffers",
  "futures",
+ "http",
  "reqwest",
  "thiserror",
  "tokio",
