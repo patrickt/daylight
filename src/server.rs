@@ -96,7 +96,8 @@ fn build_response(
     builder.finish(fb_response, None);
     let response_bytes = builder.finished_data();
 
-    Ok((StatusCode::OK, response_bytes.to_vec()).into_response())
+    // Use Bytes::copy_from_slice to create a response without extra allocation
+    Ok((StatusCode::OK, Bytes::copy_from_slice(response_bytes)).into_response())
 }
 
 pub struct OwnedDocument {
@@ -126,9 +127,9 @@ impl OwnedDocument {
 
 fn callback(highlight: ts::Highlight, output: &mut Vec<u8>) {
     let kind = languages::ALL_HIGHLIGHT_NAMES[highlight.0];
-    output.extend(b"class=\"");
-    output.extend(kind.as_bytes().iter());
-    output.extend(b"\"")
+    output.extend_from_slice(b"class=\"");
+    output.extend_from_slice(kind.as_bytes());
+    output.extend_from_slice(b"\"");
 }
 
 fn highlight(
