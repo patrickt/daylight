@@ -5,6 +5,18 @@ edition = "2024"
 
 build = "build.rs"
 
+[lib]
+name = "daylight"
+path = "src/lib.rs"
+
+[[bin]]
+name = "daylight-server"
+path = "src/bin/server.rs"
+
+[[bin]]
+name = "daylight-client"
+path = "src/bin/client.rs"
+
 [dependencies]
 anyhow = "1"
 axum = "0.7"
