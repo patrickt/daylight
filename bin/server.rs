@@ -1,6 +1,9 @@
 use clap::Parser;
 use daylight::server;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use opentelemetry::{global, metrics::MeterProvider};
+use opentelemetry_sdk::metrics::{MeterProviderBuilder, PeriodicReader};
+use tracing_opentelemetry::{MetricsLayer, OpenTelemetryLayer};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Registry};
 
 #[derive(Parser)]
 #[command(name = "daylight-server")]
@@ -35,22 +38,36 @@ fn main() -> anyhow::Result<()> {
         .build()?;
 
     runtime.block_on(async {
-        // Initialize OpenTelemetry tracing inside the runtime context
-        let otel_disabled = std::env::var("OTEL_SDK_DISABLED")
-            .is_ok_and(|v| v.eq_ignore_ascii_case("true"));
+        let otel_enabled = std::env::var("OTEL_SDK_DISABLED").is_ok_and(|s| !s.eq_ignore_ascii_case("true"));
+        if otel_enabled {
+            let span_exporter = opentelemetry_otlp::SpanExporter::builder()
+                .with_http()
+                .build()?;
+            let tracer_provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+                .with_simple_exporter(span_exporter)
+                .build();
+            global::set_tracer_provider(tracer_provider.clone());
 
-        if otel_disabled {
-            // Human-readable logging
-            let env_filter = EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info"));
-            tracing_subscriber::registry()
-                .with(env_filter)
-                .with(tracing_subscriber::fmt::layer())
-                .init();
-        } else {
-            init_tracing_opentelemetry::tracing_subscriber_ext::init_subscribers()
-                .map_err(|e| anyhow::anyhow!("Failed to initialize tracing: {}", e))?;
-        }
+            let meter_exporter = opentelemetry_otlp::MetricExporter::builder()
+                .with_http()
+                .build()?;
+            let reader = PeriodicReader::builder(meter_exporter).build();
+            let meter_provider = opentelemetry_sdk::metrics::MeterProviderBuilder::default().with_reader(reader).build();
+
+            let subscriber = Registry::default()
+                .with(OpenTelemetryLayer::new(global::tracer("daylight-server")))
+                .with(MetricsLayer::new(meter_provider));
+            tracing::subscriber::set_global_default(subscriber)?;
+        } else  {
+            let subscriber = tracing_subscriber::fmt()
+                .compact()
+                .with_file(true)
+                .with_line_number(true)
+                .with_thread_ids(true)
+                .with_target(false)
+                .finish();
+            tracing::subscriber::set_global_default(subscriber)?;
+        };
 
         let default_timeout = tokio::time::Duration::from_millis(cli.default_timeout_ms);
         let max_timeout = tokio::time::Duration::from_millis(cli.max_timeout_ms);
