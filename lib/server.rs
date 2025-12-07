@@ -141,16 +141,19 @@ fn highlight(
     cancellation_flag: Arc<AtomicUsize>,
 ) -> OwnedDocument {
     let result = PER_THREAD.with_borrow_mut(|pt| {
-        let iter = pt.highlighter.highlight(
-            &language.ts_config,
-            &contents, // Zero-copy: Bytes derefs to &[u8]
-            Some(&cancellation_flag),
-            |_| None,
-        )?;
+        let iter = {
+            let _span = tracing::trace_span!("highlight_with_tree_sitter").entered();
+            pt.highlighter.highlight(
+                &language.ts_config,
+                &contents, // Zero-copy: Bytes derefs to &[u8]
+                Some(&cancellation_flag),
+                |_| None,
+            )
+        }?;
 
+        let _span = tracing::trace_span!("render_html").entered();
         pt.renderer.reset();
         pt.renderer.render(iter, &contents, &callback)?;
-
         Ok(pt.renderer.lines().map(String::from).collect())
     });
 
@@ -309,7 +312,6 @@ pub async fn html_handler(
     build_response(tasks.collect().await)
 }
 
-/// Health endpoint - basic liveness check
 async fn health_handler() -> &'static str {
     "ok"
 }
