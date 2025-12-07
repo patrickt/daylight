@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::error::Error;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -6,13 +7,15 @@ use std::sync::Arc;
 use crate::daylight_generated::daylight::common::{self};
 use crate::daylight_generated::daylight::html;
 use crate::languages;
-use axum::{body::Bytes, extract::{DefaultBodyLimit, State}, response::IntoResponse, routing::{get, post}, Router};
+use axum::{body::Bytes, extract, response::IntoResponse, routing::{get, post}, Router};
 use futures::stream::FuturesUnordered;
 use futures::{FutureExt, StreamExt};
 use http::StatusCode;
+use opentelemetry::trace;
 use thiserror::Error;
 use tokio::time::Duration;
 use tracing::instrument;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 use tree_sitter_highlight as ts;
 
 // FlatBuffers maximum size is 2GB (2^31 - 1 bytes)
@@ -140,7 +143,7 @@ fn highlight(
     contents: bytes::Bytes,
     cancellation_flag: Arc<AtomicUsize>,
 ) -> OwnedDocument {
-    let result = PER_THREAD.with_borrow_mut(|pt| {
+    let result: Result<_, tree_sitter_highlight::Error> = PER_THREAD.with_borrow_mut(|pt| {
         let iter = {
             let _span = tracing::trace_span!("highlight_with_tree_sitter").entered();
             pt.highlighter.highlight(
@@ -166,6 +169,7 @@ fn highlight(
             error_code: common::ErrorCode::NoError,
         },
         Err(err) => {
+            tracing::Span::current().set_status(trace::Status::Error{ description: err.to_string().into() });
             let error_code = match err {
                 ts::Error::Cancelled => common::ErrorCode::Cancelled,
                 ts::Error::InvalidLanguage => common::ErrorCode::UnknownLanguage,
@@ -178,7 +182,7 @@ fn highlight(
 
 #[instrument(skip(state, body), fields(num_files, timeout_ms, request_size = body.len()))]
 pub async fn html_handler(
-    State(state): State<AppState>,
+    extract::State(state): extract::State<AppState>,
     body: Bytes,
 ) -> Result<axum::response::Response, HtmlError> {
     let request = flatbuffers::root::<html::Request>(&body)?;
@@ -279,6 +283,7 @@ pub async fn html_handler(
             })
             .map(move |t| {
                 // Fail gracefully if there was an error joining the thread
+                // TODO: figure out how to signal this in a trace
                 t.unwrap_or_else(|err| {
                     OwnedDocument::error(
                         ident,
@@ -325,12 +330,25 @@ pub async fn run(
         default_per_file_timeout,
         max_per_file_timeout,
     };
+    let counter = tower_http::metrics::in_flight_requests::InFlightRequestsCounter::new();
+
+    use tower_http::*;
+    use axum_tracing_opentelemetry::middleware;
+    let layer = tower::ServiceBuilder::new()
+        .layer(catch_panic::CatchPanicLayer::new())
+        .layer(trace::TraceLayer::new_for_http())
+        .layer(metrics::InFlightRequestsLayer::new(counter))
+        .layer(middleware::OtelInResponseLayer::default())
+        .layer(middleware::OtelAxumLayer::default())
+        .layer(decompression::DecompressionLayer::new())
+        .layer(compression::CompressionLayer::new())
+        .layer(extract::DefaultBodyLimit::max(MAX_REQUEST_SIZE))
+        ;
 
     let app = Router::new()
         .route("/v1/html", post(html_handler))
         .route("/health", get(health_handler))
-        .layer(DefaultBodyLimit::max(MAX_REQUEST_SIZE))
-        .layer(axum_tracing_opentelemetry::middleware::OtelAxumLayer::default())
+        .layer(layer)
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;

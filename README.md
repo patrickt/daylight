@@ -29,9 +29,11 @@ You can look in the flatbuffer specification file in `daylight.fbs` to see the t
 - `DAYLIGHT_DEFAULT_PER_FILE_TIMEOUT_MS` (--defau): how long an individual file is allowed to take before it (and other pending requests) are cancelled, if not specified in a request.
 - `DAYLIGHT_MAX_PER_FILE_TIMEOUT_MS`: the maximum timeout value; requests with a larger value will return 400 Bad Request.
 
-These can also be passed as command line arguments
-
 Daylight also supports OpenTelemetry tracing through the use of the [OpenTelemetry environment variable specification.](https://opentelemetry.io/docs/specs/otel/configuration/sdk-environment-variables/). If you don't want such tracing, provide `OTEL_SDK_DISABLED=true`.
+
+## Other features
+
+* Supports optional gzip and Brotli request compression/decompression.
 
 ## Limitations
 
