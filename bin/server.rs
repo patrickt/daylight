@@ -10,10 +10,10 @@ use tracing_subscriber::{layer::SubscriberExt, Registry};
 #[command(name = "daylight-server")]
 #[command(about = "Blazing-fast syntax highlighting RPC server")]
 struct Cli {
-    #[arg(long, env = "DAYLIGHT_PORT", default_value = "6767")]
+    #[arg(short, long, env = "DAYLIGHT_PORT", default_value = "49311")]
     port: u16,
 
-    #[arg(long, env = "DAYLIGHT_WORKER_THREADS", default_value = "512")]
+    #[arg(short = 't', long, env = "DAYLIGHT_WORKER_THREADS", default_value = "512")]
     worker_threads: usize,
 
     #[arg(
