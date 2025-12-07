@@ -9,7 +9,11 @@ use tree_sitter_highlight::HighlightConfiguration;
 macro_rules! language {
     ($name:ident, $fb_lang:expr, $ts_lang:expr, $lang_name:literal, $query:expr, $exts:expr) => {
         static $name: LazyLock<Config> =
-            LazyLock::new(|| Config::new($fb_lang, $ts_lang.into(), $lang_name, $query, $exts));
+            LazyLock::new(|| Config::new($fb_lang, $ts_lang.into(), $lang_name, $query, "", "", $exts));
+    };
+    ($name:ident, $fb_lang:expr, $ts_lang:expr, $lang_name:literal, $query:expr, $injection:expr, $locals:expr, $exts:expr) => {
+        static $name: LazyLock<Config> =
+            LazyLock::new(|| Config::new($fb_lang, $ts_lang.into(), $lang_name, $query, $injection, $locals, $exts));
     };
 }
 
@@ -55,10 +59,12 @@ impl Config {
         ts_language: tree_sitter::Language,
         name: &'static str,
         highlights_query: &str,
+        injection_query: &str,
+        locals_query: &str,
         extensions: &'static [&'static str],
     ) -> Self {
         let mut ts_config =
-            HighlightConfiguration::new(ts_language, name, highlights_query, "", "")
+            HighlightConfiguration::new(ts_language, name, highlights_query, injection_query, locals_query)
                 .expect("Tree-sitter bindings are broken");
         ts_config.configure(&ALL_HIGHLIGHT_NAMES);
         Config {
@@ -124,6 +130,8 @@ language!(
     tree_sitter_html::LANGUAGE,
     "html",
     tree_sitter_html::HIGHLIGHTS_QUERY,
+    tree_sitter_html::INJECTIONS_QUERY,
+    "",
     &["html", "htm"]
 );
 language!(
@@ -140,6 +148,8 @@ language!(
     tree_sitter_javascript::LANGUAGE,
     "javascript",
     tree_sitter_javascript::HIGHLIGHT_QUERY,
+    tree_sitter_javascript::INJECTIONS_QUERY,
+    tree_sitter_javascript::LOCALS_QUERY,
     &["js", "mjs", "cjs"]
 );
 language!(
@@ -164,6 +174,8 @@ language!(
     tree_sitter_ruby::LANGUAGE,
     "ruby",
     tree_sitter_ruby::HIGHLIGHTS_QUERY,
+    "",
+    tree_sitter_ruby::LOCALS_QUERY,
     &["rb"]
 );
 language!(
@@ -172,6 +184,8 @@ language!(
     tree_sitter_rust::LANGUAGE,
     "rust",
     tree_sitter_rust::HIGHLIGHTS_QUERY,
+    tree_sitter_rust::INJECTIONS_QUERY,
+    "",
     &["rs"]
 );
 language!(
@@ -180,6 +194,8 @@ language!(
     tree_sitter_typescript::LANGUAGE_TYPESCRIPT,
     "typescript",
     tree_sitter_typescript::HIGHLIGHTS_QUERY,
+    "",
+    tree_sitter_typescript::LOCALS_QUERY,
     &["ts"]
 );
 language!(
@@ -188,6 +204,8 @@ language!(
     tree_sitter_typescript::LANGUAGE_TSX,
     "tsx",
     tree_sitter_typescript::HIGHLIGHTS_QUERY,
+    "",
+    tree_sitter_typescript::LOCALS_QUERY,
     &["tsx"]
 );
 
@@ -245,7 +263,7 @@ pub fn from_path(path: &Path) -> Option<&'static Config> {
 }
 
 impl TryFrom<FbLanguage> for &'static Config {
-    type Error = anyhow::Error;
+    type Error = ();
 
     fn try_from(fb_lang: FbLanguage) -> Result<Self, Self::Error> {
         match fb_lang {
@@ -264,10 +282,8 @@ impl TryFrom<FbLanguage> for &'static Config {
             FbLanguage::Rust => Ok(&*RUST),
             FbLanguage::TypeScript => Ok(&*TYPESCRIPT),
             FbLanguage::Tsx => Ok(&*TSX),
-            FbLanguage::Unspecified => Err(anyhow::anyhow!(
-                "Language::Unspecified cannot be converted to a Language"
-            )),
-            _ => Err(anyhow::anyhow!("Unknown language variant")),
+            FbLanguage::Unspecified => Err(()),
+            _ => Err(()),
         }
     }
 }
