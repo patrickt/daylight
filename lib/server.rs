@@ -1,6 +1,4 @@
 use std::cell::RefCell;
-use std::error::Error;
-use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -10,10 +8,11 @@ use crate::languages;
 use axum::{body::Bytes, extract, response::IntoResponse, routing::{get, post}, Router};
 use futures::stream::FuturesUnordered;
 use futures::{FutureExt, StreamExt};
-use http::StatusCode;
+use http::{Request, StatusCode};
 use opentelemetry::trace;
 use thiserror::Error;
 use tokio::time::Duration;
+use tower_http::request_id::RequestId;
 use tracing::instrument;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use tree_sitter_highlight as ts;
@@ -326,31 +325,7 @@ pub async fn run(
     default_per_file_timeout: Duration,
     max_per_file_timeout: Duration,
 ) -> anyhow::Result<()> {
-    let state = AppState {
-        default_per_file_timeout,
-        max_per_file_timeout,
-    };
-    let counter = tower_http::metrics::in_flight_requests::InFlightRequestsCounter::new();
-
-    use tower_http::*;
-    use axum_tracing_opentelemetry::middleware;
-    let layer = tower::ServiceBuilder::new()
-        .layer(catch_panic::CatchPanicLayer::new())
-        .layer(trace::TraceLayer::new_for_http())
-        .layer(metrics::InFlightRequestsLayer::new(counter))
-        .layer(middleware::OtelInResponseLayer::default())
-        .layer(middleware::OtelAxumLayer::default())
-        .layer(decompression::DecompressionLayer::new())
-        .layer(compression::CompressionLayer::new())
-        .layer(extract::DefaultBodyLimit::max(MAX_REQUEST_SIZE))
-        ;
-
-    let app = Router::new()
-        .route("/v1/html", post(html_handler))
-        .route("/health", get(health_handler))
-        .layer(layer)
-        .with_state(state);
-
+    let app = router(default_per_file_timeout, max_per_file_timeout);
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
     tracing::info!("Listening on localhost:{}", port);
 
@@ -362,6 +337,52 @@ pub async fn run(
     tracing::info!("Server shutdown complete");
 
     Ok(())
+}
+
+pub fn router(default_per_file_timeout: Duration, max_per_file_timeout: Duration) -> Router {
+    let state = AppState {
+        default_per_file_timeout,
+        max_per_file_timeout,
+    };
+    let counter = tower_http::metrics::in_flight_requests::InFlightRequestsCounter::new();
+
+    use tower_http::*;
+    use axum_tracing_opentelemetry::middleware;
+
+    // Configure TraceLayer to include request ID in spans
+    let layer = tower::ServiceBuilder::new()
+        .layer(catch_panic::CatchPanicLayer::new())
+        .layer(compression::CompressionLayer::new())        // Request ID must come before tracing to be available in spans
+        .layer(decompression::DecompressionLayer::new())
+        .layer(request_id::SetRequestIdLayer::x_request_id(request_id::MakeRequestUuid))
+        .layer(request_id::PropagateRequestIdLayer::x_request_id())
+        .layer(trace::TraceLayer::new_for_http()
+               .make_span_with(|request: &Request<_>| {
+                   let request_id = request
+                       .extensions()
+                       .get::<RequestId>()
+                       .and_then(|id| id.header_value().to_str().ok())
+                       .unwrap_or("unknown");
+
+                   tracing::info_span!(
+                       "http_request",
+                       method = %request.method(),
+                       uri = %request.uri(),
+                       request_id = %request_id,
+                   )
+               }))
+        .layer(metrics::InFlightRequestsLayer::new(counter))
+        .layer(middleware::OtelInResponseLayer::default())
+        .layer(middleware::OtelAxumLayer::default())
+        .layer(extract::DefaultBodyLimit::max(MAX_REQUEST_SIZE))
+        ;
+
+    let app = Router::new()
+        .route("/v1/html", post(html_handler))
+        .route("/health", get(health_handler))
+        .layer(layer)
+        .with_state(state);
+    app
 }
 
 async fn shutdown_signal() {
