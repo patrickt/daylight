@@ -15,12 +15,22 @@ It is highly experimental, but will someday be suitable for use at scale. Probab
 
 ## Running
 
-In one tab: `cargo run server <ADDRESS>`
-In another: `cargo run client [-l LANGUAGE] <ADDRESS> PATH`
+In one tab: `cargo run --bin daylight-server <ADDRESS>`
+In another: `cargo run --bin daylight-client [-l LANGUAGE] <ADDRESS> PATH`
 
 The client will, for now, call out to `/v1/html` and write a file to /tmp containing the HTML. I haven't actually written any of the CSS required to display highlights in color, but you can check the output and see that classes are set.
 
 You can look in the flatbuffer specification file in `daylight.fbs` to see the types of returns and requests.
+
+## Environment variables
+
+- `DAYLIGHT_WORKER_THREADS`: how many highlighting workers may be allowed. If all workers are busy, highlighting requests will be queued. Default: 512.
+- `DAYLIGHT_DEFAULT_PER_FILE_TIMEOUT_MS`: how long an individual file is allowed to take before it (and other pending requests) are cancelled, if not specified in a request.
+- `DAYLIGHT_MAX_PER_FILE_TIMEOUT_MS`: the maximum timeout value; requests with a larger value will return 400 Bad Request.
+
+These can also be passed as command line arguments.
+
+Daylight also supports OpenTelemetry tracing through the use of the [OpenTelemetry environment variable specification.](https://opentelemetry.io/docs/specs/otel/configuration/sdk-environment-variables/). If you don't want such tracing, provide `OTEL_SDK_DISABLED=true`.
 
 ## Limitations
 

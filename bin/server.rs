@@ -1,5 +1,6 @@
 use clap::Parser;
 use daylight::server;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 #[derive(Parser)]
 #[command(name = "daylight-server")]
@@ -38,7 +39,15 @@ fn main() -> anyhow::Result<()> {
         let otel_disabled = std::env::var("OTEL_SDK_DISABLED")
             .is_ok_and(|v| v.eq_ignore_ascii_case("true"));
 
-        if !otel_disabled {
+        if otel_disabled {
+            // Human-readable logging
+            let env_filter = EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new("info"));
+            tracing_subscriber::registry()
+                .with(env_filter)
+                .with(tracing_subscriber::fmt::layer())
+                .init();
+        } else {
             init_tracing_opentelemetry::tracing_subscriber_ext::init_subscribers()
                 .map_err(|e| anyhow::anyhow!("Failed to initialize tracing: {}", e))?;
         }

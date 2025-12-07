@@ -332,6 +332,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-opentelemetry-instrumentation-sdk",
+ "tracing-subscriber",
  "tree-sitter",
  "tree-sitter-agda",
  "tree-sitter-bash",
@@ -2226,9 +2227,11 @@ dependencies = [
  "serde",
  "serde_json",
  "sharded-slab",
+ "smallvec",
  "thread_local",
  "tracing",
  "tracing-core",
+ "tracing-log",
  "tracing-serde",
 ]
 

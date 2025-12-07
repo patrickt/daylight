@@ -6,7 +6,7 @@ use std::sync::Arc;
 use crate::daylight_generated::daylight::common::{self};
 use crate::daylight_generated::daylight::html;
 use crate::languages;
-use axum::{body::Bytes, extract::State, response::IntoResponse, routing::post, Router};
+use axum::{body::Bytes, extract::State, response::IntoResponse, routing::{get, post}, Router};
 use futures::stream::FuturesUnordered;
 use futures::{FutureExt, StreamExt};
 use http::StatusCode;
@@ -292,6 +292,11 @@ pub async fn html_handler(
     build_response(tasks.collect().await)
 }
 
+/// Health endpoint - basic liveness check
+async fn health_handler() -> &'static str {
+    "ok"
+}
+
 pub async fn run(
     default_per_file_timeout: Duration,
     max_per_file_timeout: Duration,
@@ -304,11 +309,12 @@ pub async fn run(
 
     let app = Router::new()
         .route("/v1/html", post(html_handler))
+        .route("/health", get(health_handler))
         .layer(axum_tracing_opentelemetry::middleware::OtelAxumLayer::default())
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    println!("Listening on {}", addr);
+    tracing::info!("Listening on {}", addr);
 
     axum::serve(listener, app).await?;
 
