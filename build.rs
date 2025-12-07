@@ -3,7 +3,7 @@ use std::process::Command;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Generate FlatBuffers Rust code using flatc
     let status = Command::new("flatc")
-        .args(&["--rust", "-o", "src/generated/", "daylight.fbs"])
+        .args(&["--rust", "-o", "lib/generated/", "daylight.fbs"])
         .status();
     
     match status {

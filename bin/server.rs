@@ -28,5 +28,5 @@ fn main() -> anyhow::Result<()> {
 
     let default_timeout = tokio::time::Duration::from_millis(cli.default_timeout_ms);
     let max_timeout = tokio::time::Duration::from_millis(cli.max_timeout_ms);
-    runtime.block_on(server::main(default_timeout, max_timeout, cli.address))
+    runtime.block_on(server::run(default_timeout, max_timeout, cli.address))
 }

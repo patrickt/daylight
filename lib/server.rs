@@ -285,7 +285,7 @@ pub async fn html_handler(
     build_response(tasks.collect().await)
 }
 
-pub async fn main(
+pub async fn run(
     default_per_file_timeout: Duration,
     max_per_file_timeout: Duration,
     addr: SocketAddr,

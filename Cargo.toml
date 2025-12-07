@@ -7,15 +7,15 @@ build = "build.rs"
 
 [lib]
 name = "daylight"
-path = "src/lib.rs"
+path = "lib/lib.rs"
 
 [[bin]]
 name = "daylight-server"
-path = "src/bin/server.rs"
+path = "bin/server.rs"
 
 [[bin]]
 name = "daylight-client"
-path = "src/bin/client.rs"
+path = "bin/client.rs"
 
 [dependencies]
 anyhow = "1"
