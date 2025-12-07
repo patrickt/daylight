@@ -45,6 +45,7 @@ impl IntoResponse for HtmlError {
     }
 }
 
+#[instrument(skip(doc_results), fields(count = doc_results.len()))]
 fn build_response(
     doc_results: Vec<OwnedDocument>
 ) -> Result<axum::response::Response, HtmlError> {
