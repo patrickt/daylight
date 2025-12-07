@@ -142,7 +142,7 @@ fn highlight(
         pt.renderer.reset();
         pt.renderer.render(iter, &contents, &callback)?;
 
-        Ok::<_, tree_sitter_highlight::Error>(pt.renderer.lines().map(String::from).collect())
+        Ok(pt.renderer.lines().map(String::from).collect())
     });
 
     match result {
