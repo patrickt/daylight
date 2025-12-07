@@ -317,9 +317,9 @@ async fn health_handler() -> &'static str {
 }
 
 pub async fn run(
+    port: u16,
     default_per_file_timeout: Duration,
     max_per_file_timeout: Duration,
-    addr: SocketAddr,
 ) -> anyhow::Result<()> {
     let state = AppState {
         default_per_file_timeout,
@@ -333,8 +333,8 @@ pub async fn run(
         .layer(axum_tracing_opentelemetry::middleware::OtelAxumLayer::default())
         .with_state(state);
 
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    tracing::info!("Listening on {}", addr);
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
+    tracing::info!("Listening on localhost:{}", port);
 
     // Graceful shutdown handler
     axum::serve(listener, app)
