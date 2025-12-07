@@ -25,6 +25,7 @@ enum ErrorCode : byte {
   Cancelled = 2,
   UnknownLanguage = 3,
   UnknownError = 4,
+  FileTooLarge = 5,
 }
 
 namespace daylight.html;

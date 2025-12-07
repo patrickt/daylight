@@ -170,15 +170,16 @@ impl flatbuffers::SimpleToVerifyInSlice for Language {}
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
 pub const ENUM_MIN_ERROR_CODE: i8 = 0;
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
-pub const ENUM_MAX_ERROR_CODE: i8 = 4;
+pub const ENUM_MAX_ERROR_CODE: i8 = 5;
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
 #[allow(non_camel_case_types)]
-pub const ENUM_VALUES_ERROR_CODE: [ErrorCode; 5] = [
+pub const ENUM_VALUES_ERROR_CODE: [ErrorCode; 6] = [
   ErrorCode::NoError,
   ErrorCode::TimedOut,
   ErrorCode::Cancelled,
   ErrorCode::UnknownLanguage,
   ErrorCode::UnknownError,
+  ErrorCode::FileTooLarge,
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -191,15 +192,17 @@ impl ErrorCode {
   pub const Cancelled: Self = Self(2);
   pub const UnknownLanguage: Self = Self(3);
   pub const UnknownError: Self = Self(4);
+  pub const FileTooLarge: Self = Self(5);
 
   pub const ENUM_MIN: i8 = 0;
-  pub const ENUM_MAX: i8 = 4;
+  pub const ENUM_MAX: i8 = 5;
   pub const ENUM_VALUES: &'static [Self] = &[
     Self::NoError,
     Self::TimedOut,
     Self::Cancelled,
     Self::UnknownLanguage,
     Self::UnknownError,
+    Self::FileTooLarge,
   ];
   /// Returns the variant's name or "" if unknown.
   pub fn variant_name(self) -> Option<&'static str> {
@@ -209,6 +212,7 @@ impl ErrorCode {
       Self::Cancelled => Some("Cancelled"),
       Self::UnknownLanguage => Some("UnknownLanguage"),
       Self::UnknownError => Some("UnknownError"),
+      Self::FileTooLarge => Some("FileTooLarge"),
       _ => None,
     }
   }

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use crate::daylight_generated::daylight::common::{self};
 use crate::daylight_generated::daylight::html;
 use crate::languages;
-use axum::{body::Bytes, extract::State, response::IntoResponse, routing::{get, post}, Router};
+use axum::{body::Bytes, extract::{DefaultBodyLimit, State}, response::IntoResponse, routing::{get, post}, Router};
 use futures::stream::FuturesUnordered;
 use futures::{FutureExt, StreamExt};
 use http::StatusCode;
@@ -14,6 +14,12 @@ use thiserror::Error;
 use tokio::time::Duration;
 use tracing::instrument;
 use tree_sitter_highlight as ts;
+
+// FlatBuffers maximum size is 2GB (2^31 - 1 bytes)
+const MAX_REQUEST_SIZE: usize = 2 * 1024 * 1024 * 1024; // 2GB
+
+// Maximum size per individual file
+const MAX_FILE_SIZE: usize = 256 * 1024 * 1024; // 256MB
 
 #[derive(Clone)]
 pub struct AppState {
@@ -217,6 +223,17 @@ pub async fn html_handler(
                 .left_future();
             }
 
+            // Check file size limit
+            if file.contents().unwrap().bytes().len() > MAX_FILE_SIZE {
+                return futures::future::ready(OwnedDocument::error(
+                    ident,
+                    filename,
+                    language,
+                    common::ErrorCode::FileTooLarge,
+                ))
+                .left_future();
+            }
+
             // Look up the configured language from languages.rs
             let native_language = if file.language() == common::Language::Unspecified {
                 // Infer language from filename
@@ -310,6 +327,7 @@ pub async fn run(
     let app = Router::new()
         .route("/v1/html", post(html_handler))
         .route("/health", get(health_handler))
+        .layer(DefaultBodyLimit::max(MAX_REQUEST_SIZE))
         .layer(axum_tracing_opentelemetry::middleware::OtelAxumLayer::default())
         .with_state(state);
 

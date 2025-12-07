@@ -34,6 +34,8 @@ Daylight also supports OpenTelemetry tracing through the use of the [OpenTelemet
 
 ## Limitations
 
+The maximum request size is 2GB. This is a limitation of Flatbuffers, but should be enough for real world use.
+The maximum size of any one file is 256MB. There is no limitation on number of files in a request, aside from those inherent in Flatbuffers.
 tree-sitter supports UTF-16, but tree-sitter-highlight doesn't. A pity, that. UTF-8 is required.
 
 ## Future work
