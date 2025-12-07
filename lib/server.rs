@@ -12,6 +12,7 @@ use futures::{FutureExt, StreamExt};
 use http::StatusCode;
 use thiserror::Error;
 use tokio::time::Duration;
+use tracing::instrument;
 use tree_sitter_highlight as ts;
 
 #[derive(Clone)]
@@ -124,6 +125,7 @@ fn callback(highlight: ts::Highlight, output: &mut Vec<u8>) {
     output.extend_from_slice(b"\"");
 }
 
+#[instrument(skip(language, contents, cancellation_flag), fields(ident, filename = %filename, language = language.name))]
 fn highlight(
     ident: u16,
     filename: Arc<str>,
@@ -164,6 +166,7 @@ fn highlight(
     }
 }
 
+#[instrument(skip(state, body), fields(num_files, timeout_ms, request_size = body.len()))]
 pub async fn html_handler(
     State(state): State<AppState>,
     body: Bytes,
@@ -182,6 +185,9 @@ pub async fn html_handler(
     let timeout_flag: Arc<AtomicUsize> = Arc::default();
 
     let files = request.files().unwrap_or_default();
+    tracing::Span::current().record("num_files", files.len());
+    tracing::Span::current().record("timeout_ms", timeout_ms);
+
     if files.is_empty() {
         return build_response(vec![]);
     }
@@ -297,6 +303,7 @@ pub async fn run(
 
     let app = Router::new()
         .route("/v1/html", post(html_handler))
+        .layer(axum_tracing_opentelemetry::middleware::OtelAxumLayer::default())
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;

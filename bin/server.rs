@@ -20,13 +20,31 @@ struct Cli {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
+    // Set default service name for OpenTelemetry if not already configured
+    if std::env::var("OTEL_SERVICE_NAME").is_err() {
+        unsafe {
+            std::env::set_var("OTEL_SERVICE_NAME", "daylight-server");
+        }
+    }
+
     // Build runtime with custom blocking thread pool size
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .max_blocking_threads(cli.threads)
         .enable_all()
         .build()?;
 
-    let default_timeout = tokio::time::Duration::from_millis(cli.default_timeout_ms);
-    let max_timeout = tokio::time::Duration::from_millis(cli.max_timeout_ms);
-    runtime.block_on(server::run(default_timeout, max_timeout, cli.address))
+    runtime.block_on(async {
+        // Initialize OpenTelemetry tracing inside the runtime context
+        let otel_disabled = std::env::var("OTEL_SDK_DISABLED")
+            .is_ok_and(|v| v.eq_ignore_ascii_case("true"));
+
+        if !otel_disabled {
+            init_tracing_opentelemetry::tracing_subscriber_ext::init_subscribers()
+                .map_err(|e| anyhow::anyhow!("Failed to initialize tracing: {}", e))?;
+        }
+
+        let default_timeout = tokio::time::Duration::from_millis(cli.default_timeout_ms);
+        let max_timeout = tokio::time::Duration::from_millis(cli.max_timeout_ms);
+        server::run(default_timeout, max_timeout, cli.address).await
+    })
 }

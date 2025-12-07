@@ -33,6 +33,12 @@ reqwest = "0.12"
 http = "1.3"
 thiserror = "2.0.17"
 tokio = { version = "1", features = ["net", "rt-multi-thread", "macros", "time"]}
+tracing = "0.1"
+tracing-opentelemetry-instrumentation-sdk = "0.23"
+init-tracing-opentelemetry = { version = "0.23", features = ["otlp", "tracing_subscriber_ext"] }
+axum-tracing-opentelemetry = "0.23"
+opentelemetry = "0.27"
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
 tree-sitter = "0.25.10"
 tree-sitter-agda = "1.3.0"
 tree-sitter-bash = "0.25.1"
