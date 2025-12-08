@@ -77,7 +77,7 @@ fn build_response(
                 &html::DocumentArgs {
                     ident: doc.ident,
                     filename: Some(filename),
-                    language: doc.language,
+                    language: doc.fb_language(),
                     lines: Some(lines_vec),
                     error_code: doc.error_code,
                 },
@@ -105,16 +105,21 @@ fn build_response(
 pub struct OwnedDocument {
     pub ident: u16,
     pub filename: Arc<str>,
-    pub language: common::Language,
+    pub language: Option<&'static languages::Config>,
     pub lines: Vec<String>,
     pub error_code: common::ErrorCode,
 }
 
 impl OwnedDocument {
+    fn fb_language(&self) -> common::Language {
+        // TODO: probably warn here if unspecified
+        self.language.map_or(common::Language::Unspecified, |l| l.fb_language)
+    }
+
     pub fn error(
         ident: u16,
         filename: Arc<str>,
-        language: common::Language,
+        language: Option<&'static languages::Config>,
         error_code: common::ErrorCode,
     ) -> Self {
         Self {
@@ -163,7 +168,7 @@ fn highlight(
         Ok(lines) => OwnedDocument {
             ident,
             filename,
-            language: language.fb_language,
+            language: Some(language),
             lines,
             error_code: common::ErrorCode::NoError,
         },
@@ -174,9 +179,72 @@ fn highlight(
                 ts::Error::InvalidLanguage => common::ErrorCode::UnknownLanguage,
                 ts::Error::Unknown => common::ErrorCode::UnknownError,
             };
-            OwnedDocument::error(ident, filename, language.fb_language, error_code)
+            OwnedDocument::error(ident, filename, Some(language), error_code)
         }
     }
+}
+
+type ErroredDocument = OwnedDocument;
+
+pub fn prepare_task(file: &html::File<'_>, body: Bytes) -> Result<(Bytes, OwnedDocument), ErroredDocument> {
+    // Pull out invariant values
+    let ident = file.ident();
+    let filename: Arc<str> = Arc::from(file.filename().unwrap_or_default());
+
+    // Look up the configured language from languages.rs
+    let native_language = if file.language() == common::Language::Unspecified {
+        // Infer language from filename
+        languages::from_path(std::path::Path::new(filename.as_ref()))
+    } else {
+        // Convert FlatBuffers language to native Config
+        file.language().try_into().ok()
+    };
+
+    let Some(native_language) = native_language else {
+        return Err(OwnedDocument::error(
+            ident,
+            filename.clone(),
+            None,
+            common::ErrorCode::UnknownLanguage,
+        ))
+    };
+
+    // Bail early before spawning a task, if there's no work to do.
+    if file.contents().is_none_or(|s| s.is_empty()) {
+        // We need a left_future here because Ready and Timeout<JoinHandle> are different future types,
+        // even though they end up (after some .map() calls, in the latter case) returning the same type
+        return Err(OwnedDocument::error(
+            ident,
+            filename,
+            Some(native_language),
+            common::ErrorCode::NoError,
+        ))
+    }
+
+    // Check file size limit
+    if file.contents().unwrap().bytes().len() > MAX_FILE_SIZE {
+        return Err(OwnedDocument::error(
+            ident,
+            filename,
+            Some(native_language),
+            common::ErrorCode::FileTooLarge,
+        ))
+    }
+
+
+    // To avoid unnecessary copies, we slice out of the request body and
+    // pass that memory location down to tree-sitter-highlight.
+    let slice = file.contents().unwrap().bytes();
+    let offset = slice.as_ptr() as usize - body.as_ptr() as usize;
+    let contents = body.slice(offset..offset + slice.len());
+    let owned = OwnedDocument {
+        ident,
+        filename,
+        language: Some(native_language),
+        lines: vec![],
+        error_code: common::ErrorCode::NoError,
+    };
+    Ok((contents, owned))
 }
 
 #[instrument(skip(state, body), fields(num_files, timeout_ms, request_size = body.len()))]
@@ -211,71 +279,26 @@ pub async fn html_handler(
     let tasks: FuturesUnordered<_> = files
         .iter()
         .map(|file| {
-            // Pull out invariant values
-            let ident = file.ident();
-            let filename: Arc<str> = Arc::from(file.filename().unwrap_or_default());
-            let language = file.language();
-
-            // Bail early before spawning a task, if there's no work to do.
-            if file.contents().is_none_or(|s| s.is_empty()) {
-                // We need a left_future here because Ready and Timeout<JoinHandle> are different future types,
-                // even though they end up (after some .map() calls, in the latter case) returning the same type
-                return futures::future::ready(OwnedDocument::error(
-                    ident,
-                    filename,
-                    language,
-                    common::ErrorCode::NoError,
-                ))
-                .left_future();
-            }
-
-            // Check file size limit
-            if file.contents().unwrap().bytes().len() > MAX_FILE_SIZE {
-                return futures::future::ready(OwnedDocument::error(
-                    ident,
-                    filename,
-                    language,
-                    common::ErrorCode::FileTooLarge,
-                ))
-                .left_future();
-            }
-
-            // Look up the configured language from languages.rs
-            let native_language = if file.language() == common::Language::Unspecified {
-                // Infer language from filename
-                languages::from_path(std::path::Path::new(filename.as_ref()))
-            } else {
-                // Convert FlatBuffers language to native Config
-                file.language().try_into().ok()
+            // body.clone() here is not a full memory copy, because Bytes is cheap to clone
+            let (contents, document) = match prepare_task(&file, body.clone()) {
+                Ok(ok) => ok,
+                Err(e) => {
+                    return futures::future::ready(e).left_future()
+                }
             };
-
-            let Some(native_language) = native_language else {
-                return futures::future::ready(OwnedDocument::error(
-                    ident,
-                    filename.clone(),
-                    language,
-                    common::ErrorCode::UnknownLanguage,
-                ))
-                .left_future();
-            };
-            // To avoid unnecessary copies, we slice out of the request body and
-            // pass that memory location down to tree-sitter-highlight.
-            let slice = file.contents().unwrap().bytes();
-            let offset = slice.as_ptr() as usize - body.as_ptr() as usize;
-            let contents = body.slice(offset..offset + slice.len());
 
             // Clone the cancellation flag and filename for error handlers
             let cancellation_flag = timeout_flag.clone();
             let cancellation_flag_for_timeout = cancellation_flag.clone();
-            let filename_for_join_error = filename.clone();
-            let filename_for_timeout = filename.clone();
+            let filename_for_join_error = document.filename.clone();
+            let filename_for_timeout = document.filename.clone();
 
             // Spawn a blocking task for highlighting this file
             let task = tokio::task::spawn_blocking(move || {
                 highlight(
-                    ident,
-                    filename,
-                    native_language,
+                    document.ident,
+                    document.filename,
+                    document.language.unwrap(), // TODO fix me
                     contents,
                     cancellation_flag,
                 )
@@ -285,9 +308,9 @@ pub async fn html_handler(
                 // TODO: figure out how to signal this in a trace
                 t.unwrap_or_else(|err| {
                     OwnedDocument::error(
-                        ident,
+                        document.ident,
                         filename_for_join_error,
-                        language,
+                        document.language,
                         if err.is_cancelled() {
                             common::ErrorCode::Cancelled
                         } else {
@@ -303,9 +326,9 @@ pub async fn html_handler(
                     // know that they should cancel and return.
                     cancellation_flag_for_timeout.store(1, Ordering::SeqCst);
                     OwnedDocument::error(
-                        ident,
+                        document.ident,
                         filename_for_timeout,
-                        language,
+                        document.language,
                         common::ErrorCode::TimedOut,
                     )
                 })
