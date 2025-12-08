@@ -46,6 +46,8 @@ pub static ALL_HIGHLIGHT_NAMES: [&str; 26] = [
     "variable.parameter",
 ];
 
+pub type SharedConfig = &'static Config;
+
 pub struct Config {
     pub fb_language: FbLanguage,
     pub ts_config: tree_sitter_highlight::HighlightConfiguration,

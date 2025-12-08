@@ -105,7 +105,7 @@ fn build_response(
 pub struct OwnedDocument {
     pub ident: u16,
     pub filename: Arc<str>,
-    pub language: Option<&'static languages::Config>,
+    pub language: Option<languages::SharedConfig>,
     pub lines: Vec<String>,
     pub error_code: common::ErrorCode,
 }
@@ -119,7 +119,7 @@ impl OwnedDocument {
     pub fn error(
         ident: u16,
         filename: Arc<str>,
-        language: Option<&'static languages::Config>,
+        language: Option<languages::SharedConfig>,
         error_code: common::ErrorCode,
     ) -> Self {
         Self {
@@ -143,7 +143,7 @@ fn callback(highlight: ts::Highlight, output: &mut Vec<u8>) {
 fn highlight(
     ident: u16,
     filename: Arc<str>,
-    language: &'static languages::Config,
+    language: languages::SharedConfig,
     contents: bytes::Bytes,
     cancellation_flag: Arc<AtomicUsize>,
 ) -> OwnedDocument {
