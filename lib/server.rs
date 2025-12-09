@@ -78,12 +78,12 @@ impl Into<common::ErrorCode> for NonFatalError {
     fn into(self) -> common::ErrorCode {
         match self {
             Self::TimedOut => common::ErrorCode::TimedOut,
-            Self::Cancelled => common::ErrorCode::Cancelled,
+            Self::Cancelled => common::ErrorCode::TimedOut,
             Self::InvalidLanguage => common::ErrorCode::UnknownLanguage,
             Self::FileTooLarge => common::ErrorCode::FileTooLarge,
-            Self::EmptyFile => common::ErrorCode::NoError,
             Self::ThreadError => common::ErrorCode::UnknownError,
             Self::UnknownError => common::ErrorCode::UnknownError,
+            Self::EmptyFile => common::ErrorCode::NoError,
         }
     }
 }
@@ -149,7 +149,7 @@ pub enum HighlightOutput {
         language: languages::SharedConfig,
         lines: Vec<String>,
     },
-    OtherFailure {
+    Failure {
         ident: u16,
         filename: Arc<str>,
         language: Option<languages::SharedConfig>,
@@ -173,13 +173,13 @@ impl HighlightOutput {
         }
     }
 
-    fn error(
+    fn failure(
         ident: u16,
         filename: Arc<str>,
         language: Option<languages::SharedConfig>,
         reason: NonFatalError,
     ) -> Self {
-        Self::OtherFailure {
+        Self::Failure {
             ident,
             filename,
             language,
@@ -190,28 +190,28 @@ impl HighlightOutput {
     fn ident(&self) -> u16 {
         match self {
             Self::Success { ident, .. } => *ident,
-            Self::OtherFailure { ident, .. } => *ident,
+            Self::Failure { ident, .. } => *ident,
         }
     }
 
     fn filename<'a>(&'a self) -> &'a str {
         match self {
             Self::Success { filename, .. } => filename.as_ref(),
-            Self::OtherFailure { .. } => Default::default(),
+            Self::Failure { .. } => Default::default(),
         }
     }
 
     fn fb_language(&self) -> common::Language {
         match self {
             Self::Success { language, ..} => language.fb_language,
-            Self::OtherFailure { language, .. } => language.map(|l| l.fb_language).unwrap_or_default(),
+            Self::Failure { language, .. } => language.map(|l| l.fb_language).unwrap_or_default(),
         }
     }
 
     fn error_code(&self) -> common::ErrorCode {
         match self {
             Self::Success { ..} => common::ErrorCode::NoError,
-            Self::OtherFailure { reason, .. } => (*reason).into(),
+            Self::Failure { reason, .. } => (*reason).into(),
         }
     }
 
@@ -256,7 +256,7 @@ fn highlight(
             tracing::Span::current().set_status(trace::Status::Error {
                 description: err.to_string().into(),
             });
-            HighlightOutput::error(ident, filename, Some(language), NonFatalError::from(err))
+            HighlightOutput::failure(ident, filename, Some(language), NonFatalError::from(err))
         }
     }
 }
@@ -341,7 +341,7 @@ pub async fn html_handler(
             {
                 Ok(ok) => ok,
                 Err(e) => {
-                    return futures::future::ready(HighlightOutput::error(ident, filename, language, e)).left_future()
+                    return futures::future::ready(HighlightOutput::failure(ident, filename, language, e)).left_future()
                 }
             };
 
@@ -365,7 +365,7 @@ pub async fn html_handler(
                 // Fail gracefully if there was an error joining the thread
                 // TODO: figure out how to signal this in a trace
                 t.unwrap_or_else(|err| {
-                    HighlightOutput::error(
+                    HighlightOutput::failure(
                         ident,
                         filename_for_join_error,
                         language,
@@ -384,7 +384,7 @@ pub async fn html_handler(
                         // Timeout occurred - set the cancellation flag so inflight tree-sitter-side tasks
                         // know that they should cancel and return.
                         cancellation_flag_for_timeout.store(1, Ordering::SeqCst);
-                        HighlightOutput::error(
+                        HighlightOutput::failure(
                             ident,
                             filename_for_timeout,
                             language,

@@ -22,10 +22,9 @@ enum Language : uint16 {
 enum ErrorCode : byte {
   NoError = 0,
   TimedOut = 1,
-  Cancelled = 2,
-  UnknownLanguage = 3,
+  UnknownLanguage = 2,
+  FileTooLarge = 3,
   UnknownError = 4,
-  FileTooLarge = 5,
 }
 
 namespace daylight.html;
