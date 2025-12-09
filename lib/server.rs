@@ -23,18 +23,18 @@ use tracing::instrument;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use tree_sitter_highlight as ts;
 
-// FlatBuffers maximum size is 2GB (2^31 - 1 bytes)
 const MAX_REQUEST_SIZE: usize = 2 * 1024 * 1024 * 1024; // 2GB
-
-// Maximum size per individual file
 const MAX_FILE_SIZE: usize = 256 * 1024 * 1024; // 256MB
 
+/// Application state.
 #[derive(Clone)]
-pub struct AppState {
+pub struct Daylight {
     pub default_per_file_timeout: Duration,
     pub max_per_file_timeout: Duration,
 }
 
+
+/// State stored by tasks spawned with tokio::spawn_blocking.
 #[derive(Default)]
 struct ThreadState {
     highlighter: ts::Highlighter,
@@ -42,9 +42,21 @@ struct ThreadState {
 }
 
 thread_local! {
-    pub static PER_THREAD: RefCell<ThreadState> = RefCell::default();
+    static PER_THREAD: RefCell<ThreadState> = RefCell::default();
 }
 
+impl ThreadState {
+    /// Run a function with access to thread-local state.
+    /// No assumptions about the prior state should be made.
+    fn with<T, F>(func: F) -> T
+    where
+        F: FnOnce(&mut ThreadState) -> T,
+    {
+        PER_THREAD.with_borrow_mut(func)
+    }
+}
+
+/// Hard errors (those that fail with a non-200 HTTP error).
 #[derive(Debug, Error)]
 pub enum FatalError {
     #[error("Decoding request failed")]
@@ -53,6 +65,14 @@ pub enum FatalError {
     TimeoutTooLarge(Duration),
 }
 
+
+impl IntoResponse for FatalError {
+    fn into_response(self) -> axum::response::Response {
+        (StatusCode::BAD_REQUEST, self.to_string()).into_response()
+    }
+}
+
+/// Soft errors (those that might live alongside successful results).
 #[derive(Clone, Copy, Debug)]
 pub enum NonFatalError {
     Cancelled,
@@ -77,79 +97,21 @@ impl From<ts::Error> for NonFatalError {
 impl Into<common::ErrorCode> for NonFatalError {
     fn into(self) -> common::ErrorCode {
         match self {
-            Self::TimedOut => common::ErrorCode::TimedOut,
-            Self::Cancelled => common::ErrorCode::TimedOut,
+            Self::TimedOut | Self::Cancelled => common::ErrorCode::TimedOut,
+            Self::ThreadError | Self::UnknownError => common::ErrorCode::UnknownError,
             Self::InvalidLanguage => common::ErrorCode::UnknownLanguage,
             Self::FileTooLarge => common::ErrorCode::FileTooLarge,
-            Self::ThreadError => common::ErrorCode::UnknownError,
-            Self::UnknownError => common::ErrorCode::UnknownError,
             Self::EmptyFile => common::ErrorCode::NoError,
         }
     }
 }
 
-impl IntoResponse for FatalError {
-    fn into_response(self) -> axum::response::Response {
-        (StatusCode::BAD_REQUEST, self.to_string()).into_response()
-    }
-}
-
-#[instrument(skip(doc_results), fields(count = doc_results.len()))]
-fn build_response(
-    doc_results: Vec<HighlightOutput>,
-) -> Result<axum::response::Response, FatalError> {
-    let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(1024);
-
-    // Build documents
-    let documents: Vec<_> = doc_results
-        .into_iter()
-        .map(|doc| {
-            let filename = builder.create_string(doc.filename());
-
-            let lines = match doc {
-                HighlightOutput::Success { ref lines, .. } => lines
-                    .iter()
-                    .map(|line| builder.create_string(line))
-                    .collect(),
-                _ => vec![],
-            };
-
-            let lines_vec = builder.create_vector(&lines);
-
-            html::Document::create(
-                &mut builder,
-                &html::DocumentArgs {
-                    ident: doc.ident(),
-                    filename: Some(filename),
-                    language: doc.fb_language(),
-                    lines: Some(lines_vec),
-                    error_code: doc.error_code(),
-                },
-            )
-        })
-        .collect();
-
-    let documents_vec = builder.create_vector(&documents);
-
-    // Build response
-    let fb_response = html::Response::create(
-        &mut builder,
-        &html::ResponseArgs {
-            documents: Some(documents_vec),
-        },
-    );
-
-    builder.finish(fb_response, None);
-    let response_bytes = builder.finished_data();
-
-    // Use Bytes::copy_from_slice to create a response without extra allocation
-    Ok((StatusCode::OK, Bytes::copy_from_slice(response_bytes)).into_response())
-}
-
+/// The result of an enqueued highlight task. Not a Result<> because my brain is too small
+/// to handle nested Result types in associated Future output times.
 pub enum HighlightOutput {
     Success {
         ident: u16,
-        filename: Arc<str>,
+        filename: Arc<str>, // don't LOVE the Arc but lifetimes become quite difficult without them
         language: languages::SharedConfig,
         lines: Vec<String>,
     },
@@ -176,7 +138,7 @@ impl HighlightOutput {
         }
     }
 
-    fn fb_language(&self) -> common::Language {
+    fn language(&self) -> common::Language {
         match self {
             Self::Success { language, .. } => language.fb_language,
             Self::Failure { language, .. } => language.map(|l| l.fb_language).unwrap_or_default(),
@@ -191,69 +153,8 @@ impl HighlightOutput {
     }
 }
 
-fn callback(highlight: ts::Highlight, output: &mut Vec<u8>) {
-    let kind = languages::ALL_HIGHLIGHT_NAMES[highlight.0];
-    output.extend_from_slice(b"class=\"");
-    output.extend_from_slice(kind.as_bytes());
-    output.extend_from_slice(b"\"");
-}
-
-#[instrument(skip(language, contents, cancellation_flag), fields(ident, filename = %filename))]
-fn highlight(
-    ident: u16,
-    filename: Arc<str>,
-    language: Option<languages::SharedConfig>,
-    contents: bytes::Bytes,
-    cancellation_flag: Arc<AtomicUsize>,
-) -> HighlightOutput {
-    let Some(language) = language else {
-        return HighlightOutput::Failure {
-            ident,
-            filename,
-            language: None,
-            reason: NonFatalError::InvalidLanguage,
-        };
-    };
-
-    let result: Result<_, tree_sitter_highlight::Error> = PER_THREAD.with_borrow_mut(|pt| {
-        let iter = {
-            let _span = tracing::trace_span!("highlight_with_tree_sitter").entered();
-            pt.highlighter.highlight(
-                &language.ts_config,
-                &contents, // Zero-copy: Bytes derefs to &[u8]
-                Some(&cancellation_flag),
-                |_| None,
-            )
-        }?;
-
-        let _span = tracing::trace_span!("render_html").entered();
-        pt.renderer.reset();
-        pt.renderer.render(iter, &contents, &callback)?;
-        Ok(pt.renderer.lines().map(String::from).collect())
-    });
-
-    match result {
-        Ok(lines) => HighlightOutput::Success {
-            ident,
-            filename,
-            language,
-            lines,
-        },
-        Err(err) => {
-            tracing::Span::current().set_status(trace::Status::Error {
-                description: err.to_string().into(),
-            });
-            HighlightOutput::Failure {
-                ident,
-                filename,
-                language: Some(language),
-                reason: NonFatalError::from(err),
-            }
-        }
-    }
-}
-
-pub fn prepare_task(
+/// Slice out contents of a file from a request body, without making copies.
+fn prepare_file_contents(
     file: &html::File<'_>,
     body: Bytes,
     filename: Arc<str>,
@@ -293,9 +194,71 @@ pub fn prepare_task(
     Ok(contents)
 }
 
+fn callback(highlight: ts::Highlight, output: &mut Vec<u8>) {
+    let kind = languages::ALL_HIGHLIGHT_NAMES[highlight.0];
+    output.extend_from_slice(b"class=\"");
+    output.extend_from_slice(kind.as_bytes());
+    output.extend_from_slice(b"\"");
+}
+
+#[instrument(skip(language, contents, cancellation_flag), fields(ident, filename = %filename))]
+fn highlight(
+    ident: u16,
+    filename: Arc<str>,
+    language: Option<languages::SharedConfig>,
+    contents: bytes::Bytes,
+    cancellation_flag: Arc<AtomicUsize>,
+) -> HighlightOutput {
+    let Some(language) = language else {
+        return HighlightOutput::Failure {
+            ident,
+            filename,
+            language: None,
+            reason: NonFatalError::InvalidLanguage,
+        };
+    };
+
+    let result: Result<_, tree_sitter_highlight::Error> = ThreadState::with(|pt| {
+        let iter = {
+            let _span = tracing::trace_span!("highlight_with_tree_sitter").entered();
+            pt.highlighter.highlight(
+                &language.ts_config,
+                &contents, // Zero-copy: Bytes derefs to &[u8]
+                Some(&cancellation_flag),
+                |_| None,
+            )
+        }?;
+
+        let _span = tracing::trace_span!("render_html").entered();
+        pt.renderer.reset();
+        pt.renderer.render(iter, &contents, &callback)?;
+        Ok(pt.renderer.lines().map(String::from).collect())
+    });
+
+    match result {
+        Ok(lines) => HighlightOutput::Success {
+            ident,
+            filename,
+            language,
+            lines,
+        },
+        Err(err) => {
+            tracing::Span::current().set_status(trace::Status::Error {
+                description: err.to_string().into(),
+            });
+            HighlightOutput::Failure {
+                ident,
+                filename,
+                language: Some(language),
+                reason: NonFatalError::from(err),
+            }
+        }
+    }
+}
+
 #[instrument(skip(state, body), fields(num_files, timeout_ms, request_size = body.len()))]
 pub async fn html_handler(
-    extract::State(state): extract::State<AppState>,
+    extract::State(state): extract::State<Daylight>,
     body: Bytes,
 ) -> Result<axum::response::Response, FatalError> {
     let request = flatbuffers::root::<html::Request>(&body)?;
@@ -329,7 +292,7 @@ pub async fn html_handler(
             let filename: Arc<str> = file.filename().unwrap_or_default().into();
             let mut language: Option<languages::SharedConfig> = None;
             // body.clone() here is not a full memory copy, because Bytes is cheap to clone
-            let contents = match prepare_task(&file, body.clone(), filename.clone(), &mut language)
+            let contents = match prepare_file_contents(&file, body.clone(), filename.clone(), &mut language)
             {
                 Ok(ok) => ok,
                 Err(e) => {
@@ -389,21 +352,100 @@ pub async fn html_handler(
     build_response(tasks.collect().await)
 }
 
+#[instrument(skip(doc_results), fields(count = doc_results.len()))]
+fn build_response(
+    doc_results: Vec<HighlightOutput>,
+) -> Result<axum::response::Response, FatalError> {
+    let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(1024);
+
+    // Build documents
+    let documents: Vec<_> = doc_results
+        .into_iter()
+        .map(|doc| {
+            let filename = builder.create_string(doc.filename());
+
+            let lines = match doc {
+                HighlightOutput::Success { ref lines, .. } => lines
+                    .iter()
+                    .map(|line| builder.create_string(line))
+                    .collect(),
+                _ => vec![],
+            };
+
+            let lines_vec = builder.create_vector(&lines);
+
+            html::Document::create(
+                &mut builder,
+                &html::DocumentArgs {
+                    ident: doc.ident(),
+                    filename: Some(filename),
+                    language: doc.language(),
+                    lines: Some(lines_vec),
+                    error_code: doc.error_code(),
+                },
+            )
+        })
+        .collect();
+
+    let documents_vec = builder.create_vector(&documents);
+
+    // Build response
+    let fb_response = html::Response::create(
+        &mut builder,
+        &html::ResponseArgs {
+            documents: Some(documents_vec),
+        },
+    );
+
+    builder.finish(fb_response, None);
+    let response_bytes = builder.finished_data();
+
+    // Use Bytes::copy_from_slice to create a response without extra allocation
+    Ok((StatusCode::OK, Bytes::copy_from_slice(response_bytes)).into_response())
+}
+
 async fn health_handler() -> &'static str {
     "ok"
 }
 
+async fn shutdown_signal() {
+    use tokio::signal;
+
+    let ctrl_c = async {
+        signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    let terminate = async {
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    tokio::select! {
+        _ = ctrl_c => {
+            tracing::info!("Received SIGINT (Ctrl+C), starting graceful shutdown");
+        },
+        _ = terminate => {
+            tracing::info!("Received SIGTERM, starting graceful shutdown");
+        },
+    }
+}
+
+/// Public interface
+
+/// Build a router for a Daylight application.
 pub fn router(default_per_file_timeout: Duration, max_per_file_timeout: Duration) -> Router {
-    let state = AppState {
+    let state = Daylight {
         default_per_file_timeout,
         max_per_file_timeout,
     };
-    let counter = tower_http::metrics::in_flight_requests::InFlightRequestsCounter::new();
-
     use axum_tracing_opentelemetry::middleware;
     use tower_http::*;
 
-    // Configure TraceLayer to include request ID in spans
+    let counter = tower_http::metrics::in_flight_requests::InFlightRequestsCounter::new();
     let layer = tower::ServiceBuilder::new()
         .layer(catch_panic::CatchPanicLayer::new())
         .layer(compression::CompressionLayer::new()) // Request ID must come before tracing to be available in spans
@@ -433,40 +475,14 @@ pub fn router(default_per_file_timeout: Duration, max_per_file_timeout: Duration
         .layer(middleware::OtelAxumLayer::default())
         .layer(extract::DefaultBodyLimit::max(MAX_REQUEST_SIZE));
 
-    let app = Router::new()
+    Router::new()
         .route("/v1/html", post(html_handler))
         .route("/health", get(health_handler))
         .layer(layer)
-        .with_state(state);
-    app
+        .with_state(state)
 }
 
-async fn shutdown_signal() {
-    use tokio::signal;
-
-    let ctrl_c = async {
-        signal::ctrl_c()
-            .await
-            .expect("failed to install Ctrl+C handler");
-    };
-
-    let terminate = async {
-        signal::unix::signal(signal::unix::SignalKind::terminate())
-            .expect("failed to install SIGTERM handler")
-            .recv()
-            .await;
-    };
-
-    tokio::select! {
-        _ = ctrl_c => {
-            tracing::info!("Received SIGINT (Ctrl+C), starting graceful shutdown");
-        },
-        _ = terminate => {
-            tracing::info!("Received SIGTERM, starting graceful shutdown");
-        },
-    }
-}
-
+/// Run a Daylight application.
 pub async fn run(
     port: u16,
     default_per_file_timeout: Duration,

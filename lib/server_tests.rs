@@ -45,7 +45,7 @@ fn build_request(files: Vec<(u16, &str, &str, common::Language)>) -> Vec<u8> {
 
 #[tokio::test]
 async fn test_empty_request() {
-    let state = AppState {
+    let state = Daylight {
         default_per_file_timeout: Duration::from_secs(30),
         max_per_file_timeout: Duration::from_secs(60),
     };
@@ -60,7 +60,7 @@ async fn test_empty_request() {
 
 #[tokio::test]
 async fn test_single_c_file() {
-    let state = AppState {
+    let state = Daylight {
         default_per_file_timeout: Duration::from_secs(30),
         max_per_file_timeout: Duration::from_secs(60),
     };
@@ -99,7 +99,7 @@ int main() {
 
 #[tokio::test]
 async fn test_empty_file_contents() {
-    let state = AppState {
+    let state = Daylight {
         default_per_file_timeout: Duration::from_secs(30),
         max_per_file_timeout: Duration::from_secs(60),
     };
@@ -124,7 +124,7 @@ async fn test_empty_file_contents() {
 
 #[tokio::test]
 async fn test_multiple_files_concurrently() {
-    let state = AppState {
+    let state = Daylight {
         default_per_file_timeout: Duration::from_secs(30),
         max_per_file_timeout: Duration::from_secs(60),
     };
@@ -163,7 +163,7 @@ async fn test_multiple_files_concurrently() {
 
 #[tokio::test]
 async fn test_timeout_too_large() {
-    let state = AppState {
+    let state = Daylight {
         default_per_file_timeout: Duration::from_secs(30),
         max_per_file_timeout: Duration::from_secs(60),
     };
@@ -195,7 +195,7 @@ fn prop_arbitrary_input_still_produces_response(code: String) -> TestResult {
 
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
-        let state = AppState {
+        let state = Daylight {
             default_per_file_timeout: Duration::from_secs(5),
             max_per_file_timeout: Duration::from_secs(10),
         };
@@ -228,7 +228,7 @@ fn prop_idents_preserved(idents: Vec<u16>) -> TestResult {
 
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
-        let state = AppState {
+        let state = Daylight {
             default_per_file_timeout: Duration::from_secs(5),
             max_per_file_timeout: Duration::from_secs(10),
         };
