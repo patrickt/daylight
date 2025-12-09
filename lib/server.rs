@@ -5,7 +5,13 @@ use std::sync::Arc;
 use crate::daylight_generated::daylight::common::{self};
 use crate::daylight_generated::daylight::html;
 use crate::languages;
-use axum::{body::Bytes, extract, response::IntoResponse, routing::{get, post}, Router};
+use axum::{
+    body::Bytes,
+    extract,
+    response::IntoResponse,
+    routing::{get, post},
+    Router,
+};
 use futures::stream::FuturesUnordered;
 use futures::{FutureExt, StreamExt};
 use http::{Request, StatusCode};
@@ -40,23 +46,54 @@ thread_local! {
 }
 
 #[derive(Debug, Error)]
-pub enum HtmlError {
+pub enum FatalError {
     #[error("Decoding request failed")]
     DecodeError(#[from] flatbuffers::InvalidFlatbuffer),
     #[error("Timeout too large (max supported: {max}ms)", max = .0.as_millis())]
     TimeoutTooLarge(Duration),
 }
 
-impl IntoResponse for HtmlError {
+#[derive(Clone, Copy, Debug)]
+pub enum NonFatalError {
+    TimedOut,
+    Cancelled,
+    UnknownLanguage,
+    UnknownError,
+    FileTooLarge,
+    // EmptyFile
+}
+
+impl From<ts::Error> for NonFatalError {
+    fn from(value: ts::Error) -> Self {
+        match value {
+                ts::Error::Cancelled => Self::TimedOut,
+                ts::Error::InvalidLanguage => Self::UnknownLanguage,
+                ts::Error::Unknown => Self::UnknownError,
+            }
+    }
+}
+
+impl Into<common::ErrorCode> for NonFatalError {
+    fn into(self) -> common::ErrorCode {
+        match self {
+            Self::TimedOut => common::ErrorCode::TimedOut,
+            Self::Cancelled => common::ErrorCode::Cancelled,
+            Self::UnknownLanguage => common::ErrorCode::UnknownLanguage,
+            Self::UnknownError => common::ErrorCode::UnknownError,
+            Self::FileTooLarge => common::ErrorCode::FileTooLarge,
+        }
+    }
+}
+
+
+impl IntoResponse for FatalError {
     fn into_response(self) -> axum::response::Response {
         (StatusCode::BAD_REQUEST, self.to_string()).into_response()
     }
 }
 
 #[instrument(skip(doc_results), fields(count = doc_results.len()))]
-fn build_response(
-    doc_results: Vec<OwnedDocument>
-) -> Result<axum::response::Response, HtmlError> {
+fn build_response(doc_results: Vec<OwnedDocument>) -> Result<axum::response::Response, FatalError> {
     let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(1024);
 
     // Build documents
@@ -79,7 +116,7 @@ fn build_response(
                     filename: Some(filename),
                     language: doc.fb_language(),
                     lines: Some(lines_vec),
-                    error_code: doc.error_code,
+                    error_code: doc.error_code()
                 },
             )
         })
@@ -107,27 +144,50 @@ pub struct OwnedDocument {
     pub filename: Arc<str>,
     pub language: Option<languages::SharedConfig>,
     pub lines: Vec<String>,
-    pub error_code: common::ErrorCode,
+    pub error: Option<NonFatalError>,
 }
 
 impl OwnedDocument {
-    fn fb_language(&self) -> common::Language {
-        // TODO: probably warn here if unspecified
-        self.language.map_or(common::Language::Unspecified, |l| l.fb_language)
+    fn okay(
+        ident: u16,
+        filename: Arc<str>,
+        language: languages::SharedConfig,
+        lines: Vec<String>,
+    ) -> Self {
+        Self {
+            ident,
+            filename,
+            language: Some(language),
+            lines,
+            error: None,
+        }
     }
 
-    pub fn error(
+    fn fb_language(&self) -> common::Language {
+        // TODO: probably warn here if unspecified
+        self.language
+            .map_or(common::Language::Unspecified, |l| l.fb_language)
+    }
+
+    fn error_code(&self) -> common::ErrorCode {
+        match self.error {
+            Some(e) => e.into(),
+            None => common::ErrorCode::NoError,
+        }
+    }
+
+    fn error(
         ident: u16,
         filename: Arc<str>,
         language: Option<languages::SharedConfig>,
-        error_code: common::ErrorCode,
+        error: NonFatalError,
     ) -> Self {
         Self {
             ident,
             filename,
             language,
             lines: Vec::new(),
-            error_code,
+            error: Some(error),
         }
     }
 }
@@ -165,28 +225,22 @@ fn highlight(
     });
 
     match result {
-        Ok(lines) => OwnedDocument {
-            ident,
-            filename,
-            language: Some(language),
-            lines,
-            error_code: common::ErrorCode::NoError,
-        },
+        Ok(lines) => OwnedDocument::okay(ident, filename, language, lines),
         Err(err) => {
-            tracing::Span::current().set_status(trace::Status::Error{ description: err.to_string().into() });
-            let error_code = match err {
-                ts::Error::Cancelled => common::ErrorCode::Cancelled,
-                ts::Error::InvalidLanguage => common::ErrorCode::UnknownLanguage,
-                ts::Error::Unknown => common::ErrorCode::UnknownError,
-            };
-            OwnedDocument::error(ident, filename, Some(language), error_code)
+            tracing::Span::current().set_status(trace::Status::Error {
+                description: err.to_string().into(),
+            });
+            OwnedDocument::error(ident, filename, Some(language), NonFatalError::from(err))
         }
     }
 }
 
 type ErroredDocument = OwnedDocument;
 
-pub fn prepare_task(file: &html::File<'_>, body: Bytes) -> Result<(Bytes, OwnedDocument), ErroredDocument> {
+pub fn prepare_task(
+    file: &html::File<'_>,
+    body: Bytes,
+) -> Result<(Bytes, OwnedDocument), ErroredDocument> {
     // Pull out invariant values
     let ident = file.ident();
     let filename: Arc<str> = Arc::from(file.filename().unwrap_or_default());
@@ -205,20 +259,20 @@ pub fn prepare_task(file: &html::File<'_>, body: Bytes) -> Result<(Bytes, OwnedD
             ident,
             filename.clone(),
             None,
-            common::ErrorCode::UnknownLanguage,
-        ))
+            NonFatalError::UnknownLanguage,
+        ));
     };
 
     // Bail early before spawning a task, if there's no work to do.
     if file.contents().is_none_or(|s| s.is_empty()) {
         // We need a left_future here because Ready and Timeout<JoinHandle> are different future types,
         // even though they end up (after some .map() calls, in the latter case) returning the same type
-        return Err(OwnedDocument::error(
+        return Err(OwnedDocument::okay(
             ident,
             filename,
-            Some(native_language),
-            common::ErrorCode::NoError,
-        ))
+            native_language,
+            vec![],
+        ));
     }
 
     // Check file size limit
@@ -227,23 +281,21 @@ pub fn prepare_task(file: &html::File<'_>, body: Bytes) -> Result<(Bytes, OwnedD
             ident,
             filename,
             Some(native_language),
-            common::ErrorCode::FileTooLarge,
-        ))
+            NonFatalError::FileTooLarge,
+        ));
     }
-
 
     // To avoid unnecessary copies, we slice out of the request body and
     // pass that memory location down to tree-sitter-highlight.
     let slice = file.contents().unwrap().bytes();
     let offset = slice.as_ptr() as usize - body.as_ptr() as usize;
     let contents = body.slice(offset..offset + slice.len());
-    let owned = OwnedDocument {
+    let owned = OwnedDocument::okay(
         ident,
         filename,
-        language: Some(native_language),
-        lines: vec![],
-        error_code: common::ErrorCode::NoError,
-    };
+        native_language,
+        vec![],
+    );
     Ok((contents, owned))
 }
 
@@ -251,7 +303,7 @@ pub fn prepare_task(file: &html::File<'_>, body: Bytes) -> Result<(Bytes, OwnedD
 pub async fn html_handler(
     extract::State(state): extract::State<AppState>,
     body: Bytes,
-) -> Result<axum::response::Response, HtmlError> {
+) -> Result<axum::response::Response, FatalError> {
     let request = flatbuffers::root::<html::Request>(&body)?;
 
     let timeout_ms = request.timeout_ms();
@@ -261,7 +313,7 @@ pub async fn html_handler(
         Duration::from_millis(timeout_ms)
     };
     if timeout > state.max_per_file_timeout {
-        Err(HtmlError::TimeoutTooLarge(state.max_per_file_timeout))?
+        Err(FatalError::TimeoutTooLarge(state.max_per_file_timeout))?
     }
     let timeout_flag: Arc<AtomicUsize> = Arc::default();
 
@@ -282,9 +334,7 @@ pub async fn html_handler(
             // body.clone() here is not a full memory copy, because Bytes is cheap to clone
             let (contents, document) = match prepare_task(&file, body.clone()) {
                 Ok(ok) => ok,
-                Err(e) => {
-                    return futures::future::ready(e).left_future()
-                }
+                Err(e) => return futures::future::ready(e).left_future(),
             };
 
             // Clone the cancellation flag and filename for error handlers
@@ -312,27 +362,29 @@ pub async fn html_handler(
                         filename_for_join_error,
                         document.language,
                         if err.is_cancelled() {
-                            common::ErrorCode::Cancelled
+                            NonFatalError::Cancelled
                         } else {
-                            common::ErrorCode::UnknownError
+                            NonFatalError::UnknownError
                         },
                     )
                 })
             });
             // Run the task with the specified timeout
-            tokio::time::timeout(timeout, task).map(move |result| {
-                result.unwrap_or_else(|_elapsed| {
-                    // Timeout occurred - set the cancellation flag so inflight tree-sitter-side tasks
-                    // know that they should cancel and return.
-                    cancellation_flag_for_timeout.store(1, Ordering::SeqCst);
-                    OwnedDocument::error(
-                        document.ident,
-                        filename_for_timeout,
-                        document.language,
-                        common::ErrorCode::TimedOut,
-                    )
+            tokio::time::timeout(timeout, task)
+                .map(move |result| {
+                    result.unwrap_or_else(|_elapsed| {
+                        // Timeout occurred - set the cancellation flag so inflight tree-sitter-side tasks
+                        // know that they should cancel and return.
+                        cancellation_flag_for_timeout.store(1, Ordering::SeqCst);
+                        OwnedDocument::error(
+                            document.ident,
+                            filename_for_timeout,
+                            document.language,
+                            NonFatalError::TimedOut,
+                        )
+                    })
                 })
-            }).right_future()
+                .right_future()
         })
         .collect();
     // Wait on all in-flight tasks simultaneously with .collect() and build a response.
@@ -369,36 +421,38 @@ pub fn router(default_per_file_timeout: Duration, max_per_file_timeout: Duration
     };
     let counter = tower_http::metrics::in_flight_requests::InFlightRequestsCounter::new();
 
-    use tower_http::*;
     use axum_tracing_opentelemetry::middleware;
+    use tower_http::*;
 
     // Configure TraceLayer to include request ID in spans
     let layer = tower::ServiceBuilder::new()
         .layer(catch_panic::CatchPanicLayer::new())
-        .layer(compression::CompressionLayer::new())        // Request ID must come before tracing to be available in spans
+        .layer(compression::CompressionLayer::new()) // Request ID must come before tracing to be available in spans
         .layer(decompression::DecompressionLayer::new())
-        .layer(request_id::SetRequestIdLayer::x_request_id(request_id::MakeRequestUuid))
+        .layer(request_id::SetRequestIdLayer::x_request_id(
+            request_id::MakeRequestUuid,
+        ))
         .layer(request_id::PropagateRequestIdLayer::x_request_id())
-        .layer(trace::TraceLayer::new_for_http()
-               .make_span_with(|request: &Request<_>| {
-                   let request_id = request
-                       .extensions()
-                       .get::<RequestId>()
-                       .and_then(|id| id.header_value().to_str().ok())
-                       .unwrap_or("unknown");
+        .layer(
+            trace::TraceLayer::new_for_http().make_span_with(|request: &Request<_>| {
+                let request_id = request
+                    .extensions()
+                    .get::<RequestId>()
+                    .and_then(|id| id.header_value().to_str().ok())
+                    .unwrap_or("unknown");
 
-                   tracing::info_span!(
-                       "http_request",
-                       method = %request.method(),
-                       uri = %request.uri(),
-                       request_id = %request_id,
-                   )
-               }))
+                tracing::info_span!(
+                    "http_request",
+                    method = %request.method(),
+                    uri = %request.uri(),
+                    request_id = %request_id,
+                )
+            }),
+        )
         .layer(metrics::InFlightRequestsLayer::new(counter))
         .layer(middleware::OtelInResponseLayer::default())
         .layer(middleware::OtelAxumLayer::default())
-        .layer(extract::DefaultBodyLimit::max(MAX_REQUEST_SIZE))
-        ;
+        .layer(extract::DefaultBodyLimit::max(MAX_REQUEST_SIZE));
 
     let app = Router::new()
         .route("/v1/html", post(html_handler))
