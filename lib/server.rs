@@ -55,19 +55,20 @@ pub enum FatalError {
 
 #[derive(Clone, Copy, Debug)]
 pub enum NonFatalError {
-    TimedOut,
     Cancelled,
-    UnknownLanguage,
-    UnknownError,
-    FileTooLarge,
     EmptyFile,
+    FileTooLarge,
+    InvalidLanguage,
+    ThreadError,
+    TimedOut,
+    UnknownError,
 }
 
 impl From<ts::Error> for NonFatalError {
     fn from(value: ts::Error) -> Self {
         match value {
             ts::Error::Cancelled => Self::TimedOut,
-            ts::Error::InvalidLanguage => Self::UnknownLanguage,
+            ts::Error::InvalidLanguage => Self::InvalidLanguage,
             ts::Error::Unknown => Self::UnknownError,
         }
     }
@@ -78,9 +79,10 @@ impl Into<common::ErrorCode> for NonFatalError {
         match self {
             Self::TimedOut => common::ErrorCode::TimedOut,
             Self::Cancelled => common::ErrorCode::Cancelled,
-            Self::UnknownLanguage => common::ErrorCode::UnknownLanguage,
+            Self::InvalidLanguage => common::ErrorCode::UnknownLanguage,
             Self::FileTooLarge => common::ErrorCode::FileTooLarge,
             Self::EmptyFile => common::ErrorCode::NoError,
+            Self::ThreadError => common::ErrorCode::UnknownError,
             Self::UnknownError => common::ErrorCode::UnknownError,
         }
     }
@@ -93,20 +95,21 @@ impl IntoResponse for FatalError {
 }
 
 #[instrument(skip(doc_results), fields(count = doc_results.len()))]
-fn build_response(doc_results: Vec<OwnedDocument>) -> Result<axum::response::Response, FatalError> {
+fn build_response(doc_results: Vec<HighlightOutput>) -> Result<axum::response::Response, FatalError> {
     let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(1024);
 
     // Build documents
     let documents: Vec<_> = doc_results
         .into_iter()
         .map(|doc| {
-            let filename = builder.create_string(&doc.filename);
+            let filename = builder.create_string(doc.filename());
 
-            let lines: Vec<_> = doc
-                .lines
-                .iter()
-                .map(|line| builder.create_string(line))
-                .collect();
+            let lines = match doc {
+                HighlightOutput::Success { ref lines, .. } =>
+                    lines.iter().map(|line| builder.create_string(line)).collect(),
+                _ => vec![],
+            };
+
             let lines_vec = builder.create_vector(&lines);
 
             html::Document::create(
@@ -139,44 +142,34 @@ fn build_response(doc_results: Vec<OwnedDocument>) -> Result<axum::response::Res
     Ok((StatusCode::OK, Bytes::copy_from_slice(response_bytes)).into_response())
 }
 
-pub struct OwnedDocument {
-    pub ident: u16,
-    pub filename: Arc<str>,
-    pub language: Option<languages::SharedConfig>,
-    pub lines: Vec<String>,
-    pub error: Option<NonFatalError>,
+pub enum HighlightOutput {
+    Success {
+        ident: u16,
+        filename: Arc<str>,
+        language: languages::SharedConfig,
+        lines: Vec<String>,
+    },
+    OtherFailure {
+        ident: u16,
+        filename: Arc<str>,
+        language: Option<languages::SharedConfig>,
+        reason: NonFatalError,
+    }
+
 }
 
-impl OwnedDocument {
+impl HighlightOutput {
     fn okay(
         ident: u16,
         filename: Arc<str>,
         language: languages::SharedConfig,
         lines: Vec<String>,
     ) -> Self {
-        Self {
+        Self::Success {
             ident,
             filename,
-            language: Some(language),
+            language,
             lines,
-            error: None,
-        }
-    }
-
-    fn ident(&self) -> u16 {
-        self.ident
-    }
-
-    fn fb_language(&self) -> common::Language {
-        // TODO: probably warn here if unspecified
-        self.language
-            .map_or(common::Language::Unspecified, |l| l.fb_language)
-    }
-
-    fn error_code(&self) -> common::ErrorCode {
-        match self.error {
-            Some(e) => e.into(),
-            None => common::ErrorCode::NoError,
         }
     }
 
@@ -184,16 +177,45 @@ impl OwnedDocument {
         ident: u16,
         filename: Arc<str>,
         language: Option<languages::SharedConfig>,
-        error: NonFatalError,
+        reason: NonFatalError,
     ) -> Self {
-        Self {
+        Self::OtherFailure {
             ident,
             filename,
             language,
-            lines: Vec::new(),
-            error: Some(error),
+            reason,
         }
     }
+
+    fn ident(&self) -> u16 {
+        match self {
+            Self::Success { ident, .. } => *ident,
+            Self::OtherFailure { ident, .. } => *ident,
+        }
+    }
+
+    fn filename<'a>(&'a self) -> &'a str {
+        match self {
+            Self::Success { filename, .. } => filename.as_ref(),
+            Self::OtherFailure { .. } => Default::default(),
+        }
+    }
+
+    fn fb_language(&self) -> common::Language {
+        match self {
+            Self::Success { language, ..} => language.fb_language,
+            Self::OtherFailure { language, .. } => language.map(|l| l.fb_language).unwrap_or_default(),
+        }
+    }
+
+    fn error_code(&self) -> common::ErrorCode {
+        match self {
+            Self::Success { ..} => common::ErrorCode::NoError,
+            Self::OtherFailure { reason, .. } => (*reason).into(),
+        }
+    }
+
+
 }
 
 fn callback(highlight: ts::Highlight, output: &mut Vec<u8>) {
@@ -210,7 +232,7 @@ fn highlight(
     language: languages::SharedConfig,
     contents: bytes::Bytes,
     cancellation_flag: Arc<AtomicUsize>,
-) -> OwnedDocument {
+) -> HighlightOutput {
     let result: Result<_, tree_sitter_highlight::Error> = PER_THREAD.with_borrow_mut(|pt| {
         let iter = {
             let _span = tracing::trace_span!("highlight_with_tree_sitter").entered();
@@ -229,12 +251,12 @@ fn highlight(
     });
 
     match result {
-        Ok(lines) => OwnedDocument::okay(ident, filename, language, lines),
+        Ok(lines) => HighlightOutput::okay(ident, filename, language, lines),
         Err(err) => {
             tracing::Span::current().set_status(trace::Status::Error {
                 description: err.to_string().into(),
             });
-            OwnedDocument::error(ident, filename, Some(language), NonFatalError::from(err))
+            HighlightOutput::error(ident, filename, Some(language), NonFatalError::from(err))
         }
     }
 }
@@ -255,7 +277,7 @@ pub fn prepare_task(
     };
 
     let Some(native_language) = native_language else {
-        Err(NonFatalError::UnknownLanguage)?
+        Err(NonFatalError::InvalidLanguage)?
     };
     *language_ptr = Some(native_language);
 
@@ -319,7 +341,7 @@ pub async fn html_handler(
             {
                 Ok(ok) => ok,
                 Err(e) => {
-                    return futures::future::ready(OwnedDocument::error(ident, filename, language, e)).left_future()
+                    return futures::future::ready(HighlightOutput::error(ident, filename, language, e)).left_future()
                 }
             };
 
@@ -343,14 +365,14 @@ pub async fn html_handler(
                 // Fail gracefully if there was an error joining the thread
                 // TODO: figure out how to signal this in a trace
                 t.unwrap_or_else(|err| {
-                    OwnedDocument::error(
+                    HighlightOutput::error(
                         ident,
                         filename_for_join_error,
                         language,
                         if err.is_cancelled() {
                             NonFatalError::Cancelled
                         } else {
-                            NonFatalError::UnknownError
+                            NonFatalError::ThreadError
                         },
                     )
                 })
@@ -362,7 +384,7 @@ pub async fn html_handler(
                         // Timeout occurred - set the cancellation flag so inflight tree-sitter-side tasks
                         // know that they should cancel and return.
                         cancellation_flag_for_timeout.store(1, Ordering::SeqCst);
-                        OwnedDocument::error(
+                        HighlightOutput::error(
                             ident,
                             filename_for_timeout,
                             language,
