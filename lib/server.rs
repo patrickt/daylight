@@ -95,7 +95,9 @@ impl IntoResponse for FatalError {
 }
 
 #[instrument(skip(doc_results), fields(count = doc_results.len()))]
-fn build_response(doc_results: Vec<HighlightOutput>) -> Result<axum::response::Response, FatalError> {
+fn build_response(
+    doc_results: Vec<HighlightOutput>,
+) -> Result<axum::response::Response, FatalError> {
     let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(1024);
 
     // Build documents
@@ -105,8 +107,10 @@ fn build_response(doc_results: Vec<HighlightOutput>) -> Result<axum::response::R
             let filename = builder.create_string(doc.filename());
 
             let lines = match doc {
-                HighlightOutput::Success { ref lines, .. } =>
-                    lines.iter().map(|line| builder.create_string(line)).collect(),
+                HighlightOutput::Success { ref lines, .. } => lines
+                    .iter()
+                    .map(|line| builder.create_string(line))
+                    .collect(),
                 _ => vec![],
             };
 
@@ -154,8 +158,7 @@ pub enum HighlightOutput {
         filename: Arc<str>,
         language: Option<languages::SharedConfig>,
         reason: NonFatalError,
-    }
-
+    },
 }
 
 impl HighlightOutput {
@@ -175,19 +178,17 @@ impl HighlightOutput {
 
     fn fb_language(&self) -> common::Language {
         match self {
-            Self::Success { language, ..} => language.fb_language,
+            Self::Success { language, .. } => language.fb_language,
             Self::Failure { language, .. } => language.map(|l| l.fb_language).unwrap_or_default(),
         }
     }
 
     fn error_code(&self) -> common::ErrorCode {
         match self {
-            Self::Success { ..} => common::ErrorCode::NoError,
+            Self::Success { .. } => common::ErrorCode::NoError,
             Self::Failure { reason, .. } => (*reason).into(),
         }
     }
-
-
 }
 
 fn callback(highlight: ts::Highlight, output: &mut Vec<u8>) {
@@ -337,7 +338,8 @@ pub async fn html_handler(
                         filename,
                         language,
                         reason: e,
-                    }).left_future()
+                    })
+                    .left_future()
                 }
             };
 
@@ -349,28 +351,20 @@ pub async fn html_handler(
 
             // Spawn a blocking task for highlighting this file
             let task = tokio::task::spawn_blocking(move || {
-                highlight(
-                    ident,
-                    filename,
-                    language,
-                    contents,
-                    cancellation_flag,
-                )
+                highlight(ident, filename, language, contents, cancellation_flag)
             })
             .map(move |t| {
                 // Fail gracefully if there was an error joining the thread
                 // TODO: figure out how to signal this in a trace
-                t.unwrap_or_else(|err| {
-                    HighlightOutput::Failure {
-                        ident,
-                        filename: filename_for_join_error,
-                        language,
-                        reason: if err.is_cancelled() {
-                            NonFatalError::Cancelled
-                        } else {
-                            NonFatalError::ThreadError
-                        },
-                    }
+                t.unwrap_or_else(|err| HighlightOutput::Failure {
+                    ident,
+                    filename: filename_for_join_error,
+                    language,
+                    reason: if err.is_cancelled() {
+                        NonFatalError::Cancelled
+                    } else {
+                        NonFatalError::ThreadError
+                    },
                 })
             });
             // Run the task with the specified timeout
@@ -397,25 +391,6 @@ pub async fn html_handler(
 
 async fn health_handler() -> &'static str {
     "ok"
-}
-
-pub async fn run(
-    port: u16,
-    default_per_file_timeout: Duration,
-    max_per_file_timeout: Duration,
-) -> anyhow::Result<()> {
-    let app = router(default_per_file_timeout, max_per_file_timeout);
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
-    tracing::info!("Listening on localhost:{}", port);
-
-    // Graceful shutdown handler
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
-
-    tracing::info!("Server shutdown complete");
-
-    Ok(())
 }
 
 pub fn router(default_per_file_timeout: Duration, max_per_file_timeout: Duration) -> Router {
@@ -490,4 +465,23 @@ async fn shutdown_signal() {
             tracing::info!("Received SIGTERM, starting graceful shutdown");
         },
     }
+}
+
+pub async fn run(
+    port: u16,
+    default_per_file_timeout: Duration,
+    max_per_file_timeout: Duration,
+) -> anyhow::Result<()> {
+    let app = router(default_per_file_timeout, max_per_file_timeout);
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
+    tracing::info!("Listening on localhost:{}", port);
+
+    // Graceful shutdown handler
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+
+    tracing::info!("Server shutdown complete");
+
+    Ok(())
 }
