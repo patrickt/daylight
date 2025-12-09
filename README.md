@@ -53,4 +53,4 @@ tree-sitter supports UTF-16, but tree-sitter-highlight doesn't. A pity, that. UT
 
 ## License
 
-MIT, like tree-sitter. Buy me some luxury goods if somehow you use this to get rich.
+AGPLv3. If you wish to use this in a closed-source environment, please [contact me](mailto:patrick.william.thomson@gmail.com). It is extremely likely I will grant you an MIT-like license.

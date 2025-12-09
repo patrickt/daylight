@@ -49,7 +49,7 @@ fn main() -> anyhow::Result<()> {
 
     runtime.block_on(async {
         let otel_enabled =
-            std::env::var("OTEL_SDK_DISABLED").is_ok_and(|s| !s.eq_ignore_ascii_case("true"));
+            !std::env::var("OTEL_SDK_DISABLED").is_ok_and(|s| s.eq_ignore_ascii_case("true"));
         if otel_enabled {
             let span_exporter = otlp::SpanExporter::builder().with_http().build()?;
             let tracer_provider = trace::SdkTracerProvider::builder()
