@@ -225,14 +225,18 @@ fn callback(highlight: ts::Highlight, output: &mut Vec<u8>) {
     output.extend_from_slice(b"\"");
 }
 
-#[instrument(skip(language, contents, cancellation_flag), fields(ident, filename = %filename, language = language.name))]
+#[instrument(skip(language, contents, cancellation_flag), fields(ident, filename = %filename))]
 fn highlight(
     ident: u16,
     filename: Arc<str>,
-    language: languages::SharedConfig,
+    language: Option<languages::SharedConfig>,
     contents: bytes::Bytes,
     cancellation_flag: Arc<AtomicUsize>,
 ) -> HighlightOutput {
+    let Some(language) = language else {
+        return HighlightOutput::failure(ident, filename, None, NonFatalError::InvalidLanguage);
+    };
+
     let result: Result<_, tree_sitter_highlight::Error> = PER_THREAD.with_borrow_mut(|pt| {
         let iter = {
             let _span = tracing::trace_span!("highlight_with_tree_sitter").entered();
@@ -268,7 +272,7 @@ pub fn prepare_task(
     language_ptr: &mut Option<languages::SharedConfig>,
 ) -> Result<Bytes, NonFatalError> {
     // Look up the configured language from languages.rs
-    let native_language = if file.language() == common::Language::Unspecified {
+    *language_ptr = if file.language() == common::Language::Unspecified {
         // Infer language from filename
         languages::from_path(std::path::Path::new(filename.as_ref()))
     } else {
@@ -276,10 +280,10 @@ pub fn prepare_task(
         file.language().try_into().ok()
     };
 
-    let Some(native_language) = native_language else {
+    let Some(language) = language_ptr else {
         Err(NonFatalError::InvalidLanguage)?
     };
-    *language_ptr = Some(native_language);
+    *language_ptr = Some(language);
 
     // Bail early before spawning a task, if there's no work to do.
     if file.contents().is_none_or(|s| s.is_empty()) {
@@ -356,7 +360,7 @@ pub async fn html_handler(
                 highlight(
                     ident,
                     filename,
-                    language.unwrap(), // TODO fix me
+                    language,
                     contents,
                     cancellation_flag,
                 )

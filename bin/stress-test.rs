@@ -24,7 +24,7 @@ struct Args {
 
 fn collect_files(pattern: &str) -> anyhow::Result<Vec<PathBuf>> {
     let mut files = Vec::new();
-    
+
     for entry in glob::glob(pattern)? {
         match entry {
             Ok(path) if path.is_file() => files.push(path),
@@ -32,7 +32,7 @@ fn collect_files(pattern: &str) -> anyhow::Result<Vec<PathBuf>> {
             Err(e) => eprintln!("Error reading entry: {}", e),
         }
     }
-    
+
     Ok(files)
 }
 
@@ -43,11 +43,11 @@ async fn main() -> anyhow::Result<()> {
     // Collect all files matching the pattern
     println!("Collecting files matching pattern: {}", args.pattern);
     let file_paths = collect_files(&args.pattern)?;
-    
+
     if file_paths.is_empty() {
         anyhow::bail!("No files found matching pattern: {}", args.pattern);
     }
-    
+
     println!("Found {} files", file_paths.len());
 
     // Build FlatBuffers request
@@ -123,7 +123,6 @@ async fn main() -> anyhow::Result<()> {
 
     // Count results
     let mut success_count = 0;
-    let mut cancelled_count = 0;
     let mut timeout_count = 0;
     let mut unknown_language_count = 0;
     let mut unknown_error_count = 0;
@@ -133,7 +132,6 @@ async fn main() -> anyhow::Result<()> {
             let doc = documents.get(i);
             match doc.error_code() {
                 common::ErrorCode::NoError => success_count += 1,
-                common::ErrorCode::Cancelled => cancelled_count += 1,
                 common::ErrorCode::TimedOut => timeout_count += 1,
                 common::ErrorCode::UnknownLanguage => unknown_language_count += 1,
                 common::ErrorCode::UnknownError => unknown_error_count += 1,
@@ -142,20 +140,19 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    let total = success_count + cancelled_count + timeout_count + unknown_language_count + unknown_error_count;
+    let total = success_count + timeout_count + unknown_language_count + unknown_error_count;
 
     // Print results
     println!("\n=== Stress Test Results ===");
     println!("Total files:          {}", total);
     println!("Successful:           {} ({:.1}%)", success_count, (success_count as f64 / total as f64) * 100.0);
-    println!("Failed (cancelled):   {}", cancelled_count);
     println!("Failed (timeout):     {}", timeout_count);
     println!("Failed (unknown lang): {}", unknown_language_count);
     println!("Failed (other):       {}", unknown_error_count);
     println!("Time elapsed:         {:?}", elapsed);
     println!("Throughput:           {:.1} files/sec", total as f64 / elapsed.as_secs_f64());
 
-    let failed_count = cancelled_count + timeout_count + unknown_language_count + unknown_error_count;
+    let failed_count = timeout_count + unknown_language_count + unknown_error_count;
     if failed_count > 0 {
         println!("\nTotal failures:       {}", failed_count);
         std::process::exit(1);
