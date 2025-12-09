@@ -159,34 +159,6 @@ pub enum HighlightOutput {
 }
 
 impl HighlightOutput {
-    fn okay(
-        ident: u16,
-        filename: Arc<str>,
-        language: languages::SharedConfig,
-        lines: Vec<String>,
-    ) -> Self {
-        Self::Success {
-            ident,
-            filename,
-            language,
-            lines,
-        }
-    }
-
-    fn failure(
-        ident: u16,
-        filename: Arc<str>,
-        language: Option<languages::SharedConfig>,
-        reason: NonFatalError,
-    ) -> Self {
-        Self::Failure {
-            ident,
-            filename,
-            language,
-            reason,
-        }
-    }
-
     fn ident(&self) -> u16 {
         match self {
             Self::Success { ident, .. } => *ident,
@@ -234,7 +206,12 @@ fn highlight(
     cancellation_flag: Arc<AtomicUsize>,
 ) -> HighlightOutput {
     let Some(language) = language else {
-        return HighlightOutput::failure(ident, filename, None, NonFatalError::InvalidLanguage);
+        return HighlightOutput::Failure {
+            ident,
+            filename,
+            language: None,
+            reason: NonFatalError::InvalidLanguage,
+        };
     };
 
     let result: Result<_, tree_sitter_highlight::Error> = PER_THREAD.with_borrow_mut(|pt| {
@@ -255,12 +232,22 @@ fn highlight(
     });
 
     match result {
-        Ok(lines) => HighlightOutput::okay(ident, filename, language, lines),
+        Ok(lines) => HighlightOutput::Success {
+            ident,
+            filename,
+            language,
+            lines,
+        },
         Err(err) => {
             tracing::Span::current().set_status(trace::Status::Error {
                 description: err.to_string().into(),
             });
-            HighlightOutput::failure(ident, filename, Some(language), NonFatalError::from(err))
+            HighlightOutput::Failure {
+                ident,
+                filename,
+                language: Some(language),
+                reason: NonFatalError::from(err),
+            }
         }
     }
 }
@@ -345,7 +332,12 @@ pub async fn html_handler(
             {
                 Ok(ok) => ok,
                 Err(e) => {
-                    return futures::future::ready(HighlightOutput::failure(ident, filename, language, e)).left_future()
+                    return futures::future::ready(HighlightOutput::Failure {
+                        ident,
+                        filename,
+                        language,
+                        reason: e,
+                    }).left_future()
                 }
             };
 
@@ -369,16 +361,16 @@ pub async fn html_handler(
                 // Fail gracefully if there was an error joining the thread
                 // TODO: figure out how to signal this in a trace
                 t.unwrap_or_else(|err| {
-                    HighlightOutput::failure(
+                    HighlightOutput::Failure {
                         ident,
-                        filename_for_join_error,
+                        filename: filename_for_join_error,
                         language,
-                        if err.is_cancelled() {
+                        reason: if err.is_cancelled() {
                             NonFatalError::Cancelled
                         } else {
                             NonFatalError::ThreadError
                         },
-                    )
+                    }
                 })
             });
             // Run the task with the specified timeout
@@ -388,12 +380,12 @@ pub async fn html_handler(
                         // Timeout occurred - set the cancellation flag so inflight tree-sitter-side tasks
                         // know that they should cancel and return.
                         cancellation_flag_for_timeout.store(1, Ordering::SeqCst);
-                        HighlightOutput::failure(
+                        HighlightOutput::Failure {
                             ident,
-                            filename_for_timeout,
+                            filename: filename_for_timeout,
                             language,
-                            NonFatalError::TimedOut,
-                        )
+                            reason: NonFatalError::TimedOut,
+                        }
                     })
                 })
                 .right_future()
