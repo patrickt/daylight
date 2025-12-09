@@ -34,8 +34,9 @@ Pull requests for new languages are enthusiastically accepted.
 
 ## Running
 
-In one tab: `cargo run --bin daylight-server <ADDRESS>`
-In another: `cargo run --bin daylight-client [-l LANGUAGE] <ADDRESS> PATH`
+In one tab: `cargo run --bin daylight-server -p 8765`.
+
+In another: `cargo run --bin daylight-client [-l LANGUAGE] 127.0.0.1:8765 PATH`.
 
 The client will, for now, call out to `/v1/html` and write a file to /tmp containing the HTML. I haven't actually written any of the CSS required to display highlights in color, but you can check the output and see that classes are set.
 
