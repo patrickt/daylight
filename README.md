@@ -73,4 +73,8 @@ tree-sitter supports UTF-16, but tree-sitter-highlight doesn't. A pity, that. UT
 
 ## License
 
-AGPLv3 (see `LICENSE.txt`) or the Hippocratic License with BDS module (see `HIPPOCRATIC_LICENSE.txt`). If neither of these licensing terms is acceptable to you, you may [contact me](mailto:patrick.william.thomson@gmail.com) for a discussion of licensing fees.
+Pick either one of:
+* the AGPLv3 (see `LICENSE`);
+* or _both_ the MIT License ( see `LICENSE_MIT`) and the Hippocratic License with BDS module (see `LICENSE_HIPPOCRATIC`).
+
+If neither of these licensing terms is acceptable to you, you may [contact me](mailto:patrick.william.thomson@gmail.com) for a discussion of licensing fees.
