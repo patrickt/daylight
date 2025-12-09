@@ -13,6 +13,25 @@ It is alpha software, but should be usable in practice. On my M4 laptop it can h
 * _Client-friendly._ Any language with a Flatbuffers binding and an HTTP library should be able to write to this. Unfortunately, until the Rust flatbuffers crate supports RPC definitions, this project cannot define the RPC interface in the schema. Right now there is only one interesting endpoint so that is fine. (This eliminates [tarpc](https://github.com/google/tarpc) as an option, because it supports only Rust clients.)
 * _Wide language support._ All the official tree-sitter languages should work, and any reasonably-up-to-date community language should work, too.
 
+## Languages supported
+
+* Agda
+* Bash
+* C
+* C++
+* CSS
+* Go
+* HTML
+* Java
+* JavaScript/JSX
+* JSON
+* Python
+* Ruby
+* Rust
+* TypeScript/TSX
+
+Pull requests for new languages are enthusiastically accepted.
+
 ## Running
 
 In one tab: `cargo run --bin daylight-server <ADDRESS>`
