@@ -2,7 +2,7 @@
 
 Daylight is a blazing-fast syntax highlighting RPC server built on top of [axum](https://github.com/tokio-rs/axum), [flatbuffers](https://flatbuffers.dev), and [tree-sitter-highlight](https://tree-sitter.github.io/tree-sitter/3-syntax-highlighting.html).
 
-It is alpha software, but should be usable in practice. On my M4 laptop it can highlight ~400 documents in 44ms, which works out to around 9000 files per second.
+It is alpha software, but should be usable in practice. It is capable of highlighting thousands of documents per second on laptop hardware.
 
 ## Design goals
 
