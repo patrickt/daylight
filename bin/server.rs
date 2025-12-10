@@ -45,10 +45,13 @@ fn main() -> anyhow::Result<()> {
 
     runtime.block_on(async {
         // Initialize OpenTelemetry tracing inside the runtime context
-        let otel_disabled = std::env::var("OTEL_SDK_DISABLED")
-            .is_ok_and(|v| v.eq_ignore_ascii_case("true"));
+        let otel_enabled = !std::env::var("OTEL_SDK_DISABLED")
+            .is_ok_and(|v| v.eq_ignore_ascii_case("true") || v == "1");
 
-        if otel_disabled {
+        if otel_enabled {
+            let _ = init_tracing_opentelemetry::tracing_subscriber_ext::init_subscribers()
+                .map_err(|e| anyhow::anyhow!("Failed to initialize tracing: {}", e))?;
+        } else {
             let subscriber = tracing_subscriber::fmt()
                 .compact()
                 .with_file(true)
@@ -57,9 +60,6 @@ fn main() -> anyhow::Result<()> {
                 .with_target(false)
                 .finish();
             tracing::subscriber::set_global_default(subscriber)?
-        } else {
-            let _ = init_tracing_opentelemetry::tracing_subscriber_ext::init_subscribers()
-                .map_err(|e| anyhow::anyhow!("Failed to initialize tracing: {}", e))?;
         }
 
         let default_timeout = tokio::time::Duration::from_millis(cli.default_timeout_ms);
