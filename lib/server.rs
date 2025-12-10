@@ -305,15 +305,18 @@ pub async fn html_handler(
             .map(move |t| {
                 // Fail gracefully if there was an error joining the thread
                 // TODO: figure out how to signal this in a trace
-                t.unwrap_or_else(|err| HighlightOutput::Failure {
-                    ident,
-                    filename: filename_for_join_error,
-                    language,
-                    reason: if err.is_cancelled() {
-                        NonFatalError::Cancelled
-                    } else {
-                        NonFatalError::ThreadError
-                    },
+                t.unwrap_or_else(|err| {
+                    tracing::warn!("Join error encountered, this is upsetting: {err}");
+                    HighlightOutput::Failure {
+                        ident,
+                        filename: filename_for_join_error,
+                        language,
+                        reason: if err.is_cancelled() {
+                            NonFatalError::Cancelled
+                        } else {
+                            NonFatalError::ThreadError
+                        },
+                    }
                 })
             });
             // Run the task with the specified timeout
