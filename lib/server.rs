@@ -193,6 +193,7 @@ fn highlight(
     filename: Arc<str>,
     language: Option<languages::SharedConfig>,
     contents: bytes::Bytes,
+    include_injections: bool,
     cancellation_flag: Arc<AtomicUsize>,
 ) -> HighlightOutput {
     let Some(language) = language else {
@@ -211,8 +212,13 @@ fn highlight(
                 &language.ts_config,
                 &contents,
                 Some(&cancellation_flag),
-                // This is exceptionally slow (like 3x slower). Do we want to make injection a property of the request?
-                |s| languages::from_name(s).map(|s| &s.ts_config),
+                |s| {
+                    if include_injections {
+                        languages::from_name(s).map(|l| &l.ts_config)
+                    } else {
+                        None
+                    }
+                },
             )
         }?;
 
@@ -221,6 +227,7 @@ fn highlight(
         pt.renderer.render(iter, &contents, &callback)?;
         Ok(pt.renderer.lines().map(String::from).collect())
     });
+
 
     match result {
         Ok(lines) => HighlightOutput::Success {
@@ -298,10 +305,11 @@ pub async fn html_handler(
             let cancellation_flag_for_timeout = cancellation_flag.clone();
             let filename_for_join_error = filename.clone();
             let filename_for_timeout = filename.clone();
+            let include_injections = file.include_injections();
 
             // Spawn a blocking task for highlighting this file
             let task = tokio::task::spawn_blocking(move || {
-                highlight(ident, filename, language, contents, cancellation_flag)
+                highlight(ident, filename, language, contents, include_injections, cancellation_flag)
             })
             .map(move |t| {
                 // Fail gracefully if there was an error joining the thread

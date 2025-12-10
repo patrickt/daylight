@@ -296,7 +296,8 @@ impl<'a> File<'a> {
   pub const VT_FILENAME: flatbuffers::VOffsetT = 6;
   pub const VT_CONTENTS: flatbuffers::VOffsetT = 8;
   pub const VT_LANGUAGE: flatbuffers::VOffsetT = 10;
-  pub const VT_OPTIONS: flatbuffers::VOffsetT = 12;
+  pub const VT_INCLUDE_INJECTIONS: flatbuffers::VOffsetT = 12;
+  pub const VT_OPTIONS: flatbuffers::VOffsetT = 14;
 
   #[inline]
   pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
@@ -313,6 +314,7 @@ impl<'a> File<'a> {
     if let Some(x) = args.filename { builder.add_filename(x); }
     builder.add_language(args.language);
     builder.add_ident(args.ident);
+    builder.add_include_injections(args.include_injections);
     builder.finish()
   }
 
@@ -354,6 +356,15 @@ impl<'a> File<'a> {
     // which contains a valid value in this slot
     unsafe { self._tab.get::<super::common::Language>(File::VT_LANGUAGE, Some(super::common::Language::Unspecified)).unwrap()}
   }
+  /// Whether or not to allow injections of other grammars (like Ruby source code when highlighting .erb files).
+  /// If true, this can produce richer output, but comes with a speed cost.
+  #[inline]
+  pub fn include_injections(&self) -> bool {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<bool>(File::VT_INCLUDE_INJECTIONS, Some(false)).unwrap()}
+  }
   /// Not currently used.
   #[inline]
   pub fn options(&self) -> Option<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<&'a str>>> {
@@ -375,6 +386,7 @@ impl flatbuffers::Verifiable for File<'_> {
      .visit_field::<flatbuffers::ForwardsUOffset<&str>>("filename", Self::VT_FILENAME, false)?
      .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>("contents", Self::VT_CONTENTS, false)?
      .visit_field::<super::common::Language>("language", Self::VT_LANGUAGE, false)?
+     .visit_field::<bool>("include_injections", Self::VT_INCLUDE_INJECTIONS, false)?
      .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<&'_ str>>>>("options", Self::VT_OPTIONS, false)?
      .finish();
     Ok(())
@@ -385,6 +397,7 @@ pub struct FileArgs<'a> {
     pub filename: Option<flatbuffers::WIPOffset<&'a str>>,
     pub contents: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u8>>>,
     pub language: super::common::Language,
+    pub include_injections: bool,
     pub options: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<&'a str>>>>,
 }
 impl<'a> Default for FileArgs<'a> {
@@ -395,6 +408,7 @@ impl<'a> Default for FileArgs<'a> {
       filename: None,
       contents: None,
       language: super::common::Language::Unspecified,
+      include_injections: false,
       options: None,
     }
   }
@@ -422,6 +436,10 @@ impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> FileBuilder<'a, 'b, A> {
     self.fbb_.push_slot::<super::common::Language>(File::VT_LANGUAGE, language, super::common::Language::Unspecified);
   }
   #[inline]
+  pub fn add_include_injections(&mut self, include_injections: bool) {
+    self.fbb_.push_slot::<bool>(File::VT_INCLUDE_INJECTIONS, include_injections, false);
+  }
+  #[inline]
   pub fn add_options(&mut self, options: flatbuffers::WIPOffset<flatbuffers::Vector<'b , flatbuffers::ForwardsUOffset<&'b  str>>>) {
     self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(File::VT_OPTIONS, options);
   }
@@ -447,6 +465,7 @@ impl core::fmt::Debug for File<'_> {
       ds.field("filename", &self.filename());
       ds.field("contents", &self.contents());
       ds.field("language", &self.language());
+      ds.field("include_injections", &self.include_injections());
       ds.field("options", &self.options());
       ds.finish()
   }

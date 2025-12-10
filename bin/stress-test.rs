@@ -17,6 +17,10 @@ struct Args {
     #[arg(value_name = "PATTERN")]
     pattern: String,
 
+    /// Whether or not to include other injected languages (better output, slower operation)
+    #[arg(short, long, default_value = false)]
+    include_injections: bool,
+
     /// Timeout per file in milliseconds (0 = use server default)
     #[arg(short, long, default_value = "0")]
     timeout_ms: u64,
@@ -79,6 +83,7 @@ async fn main() -> anyhow::Result<()> {
                 contents: Some(contents_offset),
                 options: None,
                 language: common::Language::Unspecified, // Auto-detect from extension
+                include_injections: args.include_injections,
             },
         );
 

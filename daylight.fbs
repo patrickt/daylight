@@ -44,6 +44,9 @@ table File {
   /// infer the language based on its filename. If that is unsuccessful, the file is considered
   /// bad and a Failure will be returned.
   language: daylight.common.Language;
+  /// Whether or not to allow injections of other grammars (like Ruby source code when highlighting .erb files).
+  /// If true, this can produce richer output, but comes with a speed cost.
+  include_injections: bool;
   /// Not currently used.
   options: [string];
 }

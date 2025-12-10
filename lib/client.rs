@@ -26,6 +26,7 @@ pub async fn main(address: SocketAddr, language: &'static Config, path: PathBuf)
             contents: Some(contents_offset),
             options: None,
             language: language.fb_language,
+            include_injections: false,
         },
     );
 
