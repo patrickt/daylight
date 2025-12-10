@@ -51,7 +51,7 @@ fn main() -> anyhow::Result<()> {
         let tracing_config = if otel_enabled {
             TracingConfig::production()
         } else {
-            TracingConfig::development()
+            TracingConfig::minimal()
         };
         let _ = tracing_config.init_subscriber().expect("Couldn't initialize tracing");
 
