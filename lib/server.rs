@@ -153,41 +153,29 @@ impl HighlightOutput {
     }
 }
 
-/// Slice out contents of a file from a request body, without making copies.
+/// Try slicing out contents of a file from a request body, without making copies.
+#[instrument(skip(file, body, language))]
 fn prepare_file_contents(
     file: &html::File<'_>,
     body: Bytes,
     filename: Arc<str>,
-    language_ptr: &mut Option<languages::SharedConfig>,
+    // Sent by reference to avoid writing Result<(Bytes, Language), (NonFatalError, Language)>.
+    language: &mut Option<languages::SharedConfig>,
 ) -> Result<Bytes, NonFatalError> {
-    // Look up the configured language from languages.rs
-    *language_ptr = if file.language() == common::Language::Unspecified {
-        // Infer language from filename
+    *language = if file.language() == common::Language::Unspecified {
         languages::from_path(std::path::Path::new(filename.as_ref()))
     } else {
-        // Convert FlatBuffers language to native Config
         file.language().try_into().ok()
     };
 
-    let Some(language) = language_ptr else {
+    if language.is_none() {
         Err(NonFatalError::InvalidLanguage)?
-    };
-    *language_ptr = Some(language);
-
-    // Bail early before spawning a task, if there's no work to do.
-    if file.contents().is_none_or(|s| s.is_empty()) {
-        // We need a left_future here because Ready and Timeout<JoinHandle> are different future types,
-        // even though they end up (after some .map() calls, in the latter case) returning the same type
+    } else if file.contents().is_none_or(|s| s.is_empty()) {
         Err(NonFatalError::EmptyFile)?
-    }
-
-    // Check file size limit
-    if file.contents().unwrap().bytes().len() > MAX_FILE_SIZE {
+    } else if file.contents().unwrap().bytes().len() > MAX_FILE_SIZE {
         Err(NonFatalError::FileTooLarge)?
     }
 
-    // To avoid unnecessary copies, we slice out of the request body and
-    // pass that memory location down to tree-sitter-highlight.
     let slice = file.contents().unwrap().bytes();
     let offset = slice.as_ptr() as usize - body.as_ptr() as usize;
     let contents = body.slice(offset..offset + slice.len());
@@ -201,7 +189,7 @@ fn callback(highlight: ts::Highlight, output: &mut Vec<u8>) {
     output.extend_from_slice(b"\"");
 }
 
-#[instrument(skip(language, contents, cancellation_flag), fields(ident, filename = %filename))]
+#[instrument(skip(language, contents, cancellation_flag))]
 fn highlight(
     ident: u16,
     filename: Arc<str>,
@@ -223,7 +211,7 @@ fn highlight(
             let _span = tracing::trace_span!("highlight_with_tree_sitter").entered();
             pt.highlighter.highlight(
                 &language.ts_config,
-                &contents, // Zero-copy: Bytes derefs to &[u8]
+                &contents,
                 Some(&cancellation_flag),
                 |_| None,
             )
