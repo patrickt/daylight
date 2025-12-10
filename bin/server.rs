@@ -1,7 +1,6 @@
 use clap::Parser;
 use daylight::server;
 use init_tracing_opentelemetry::TracingConfig;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 #[derive(Parser)]
 #[command(name = "daylight-server")]
