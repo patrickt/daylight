@@ -213,7 +213,7 @@ fn highlight(
                 &language.ts_config,
                 &contents,
                 Some(&cancellation_flag),
-                |_| None,
+                |s| languages::from_name(s).map(|s| &s.ts_config),
             )
         }?;
 
