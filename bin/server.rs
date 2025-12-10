@@ -1,5 +1,6 @@
 use clap::Parser;
 use daylight::server;
+use init_tracing_opentelemetry::TracingConfig;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 #[derive(Parser)]
@@ -48,19 +49,12 @@ fn main() -> anyhow::Result<()> {
         let otel_enabled = !std::env::var("OTEL_SDK_DISABLED")
             .is_ok_and(|v| v.eq_ignore_ascii_case("true") || v == "1");
 
-        if otel_enabled {
-            let _ = init_tracing_opentelemetry::tracing_subscriber_ext::init_subscribers()
-                .map_err(|e| anyhow::anyhow!("Failed to initialize tracing: {}", e))?;
+        let tracing_config = if otel_enabled {
+            TracingConfig::production()
         } else {
-            let subscriber = tracing_subscriber::fmt()
-                .compact()
-                .with_file(true)
-                .with_line_number(true)
-                .with_thread_ids(true)
-                .with_target(false)
-                .finish();
-            tracing::subscriber::set_global_default(subscriber)?
-        }
+            TracingConfig::development()
+        };
+        let _ = tracing_config.init_subscriber().expect("Couldn't initialize tracing");
 
         let default_timeout = tokio::time::Duration::from_millis(cli.default_timeout_ms);
         let max_timeout = tokio::time::Duration::from_millis(cli.max_timeout_ms);
