@@ -33,7 +33,6 @@ pub struct Daylight {
     pub max_per_file_timeout: Duration,
 }
 
-
 /// State stored by tasks spawned with tokio::spawn_blocking.
 #[derive(Default)]
 struct ThreadState {
@@ -64,7 +63,6 @@ pub enum FatalError {
     #[error("Timeout too large (max supported: {max}ms)", max = .0.as_millis())]
     TimeoutTooLarge(Duration),
 }
-
 
 impl IntoResponse for FatalError {
     fn into_response(self) -> axum::response::Response {
@@ -280,19 +278,19 @@ pub async fn html_handler(
             let filename: Arc<str> = file.filename().unwrap_or_default().into();
             let mut language: Option<languages::SharedConfig> = None;
             // body.clone() here is not a full memory copy, because Bytes is cheap to clone
-            let contents = match prepare_file_contents(&file, body.clone(), filename.clone(), &mut language)
-            {
-                Ok(ok) => ok,
-                Err(e) => {
-                    return futures::future::ready(HighlightOutput::Failure {
-                        ident,
-                        filename,
-                        language,
-                        reason: e,
-                    })
-                    .left_future()
-                }
-            };
+            let contents =
+                match prepare_file_contents(&file, body.clone(), filename.clone(), &mut language) {
+                    Ok(ok) => ok,
+                    Err(e) => {
+                        return futures::future::ready(HighlightOutput::Failure {
+                            ident,
+                            filename,
+                            language,
+                            reason: e,
+                        })
+                        .left_future()
+                    }
+                };
 
             // Clone the cancellation flag and filename for error handlers
             let cancellation_flag = timeout_flag.clone();
