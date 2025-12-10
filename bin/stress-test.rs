@@ -18,7 +18,7 @@ struct Args {
     pattern: String,
 
     /// Whether or not to include other injected languages (better output, slower operation)
-    #[arg(short, long, default_value = false)]
+    #[arg(short, long, default_value = "false")]
     include_injections: bool,
 
     /// Timeout per file in milliseconds (0 = use server default)

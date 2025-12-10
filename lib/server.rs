@@ -28,12 +28,12 @@ const MAX_FILE_SIZE: usize = 256 * 1024 * 1024; // 256MB
 
 /// Application state.
 #[derive(Clone)]
-pub struct Daylight {
-    pub default_per_file_timeout: Duration,
-    pub max_per_file_timeout: Duration,
+pub struct Server {
+    default_per_file_timeout: Duration,
+    max_per_file_timeout: Duration,
 }
 
-/// State stored by tasks spawned with tokio::spawn_blocking.
+/// State stored by highlighting tasks spawned with tokio::spawn_blocking.
 #[derive(Default)]
 struct ThreadState {
     highlighter: ts::Highlighter,
@@ -41,17 +41,24 @@ struct ThreadState {
 }
 
 thread_local! {
-    static PER_THREAD: RefCell<ThreadState> = RefCell::default();
+    // Has to be a RefCell because we need &muts for the tree-sitter
+    static HIGHLIGHTER_STATE: RefCell<ThreadState> = RefCell::default();
+    static RESPONSE_BUILDER: RefCell<flatbuffers::FlatBufferBuilder<'static>> = RefCell::default();
 }
 
 impl ThreadState {
-    /// Run a function with access to thread-local state.
-    /// No assumptions about the prior state should be made.
-    fn with<T, F>(func: F) -> T
+    fn for_highlighting<T, F>(func: F) -> T
     where
         F: FnOnce(&mut ThreadState) -> T,
     {
-        PER_THREAD.with_borrow_mut(func)
+        HIGHLIGHTER_STATE.with_borrow_mut(func)
+    }
+
+    fn for_building<T, F>(func: F) -> T
+    where
+        F: FnOnce(&mut flatbuffers::FlatBufferBuilder) -> T,
+    {
+        RESPONSE_BUILDER.with_borrow_mut(func)
     }
 }
 
@@ -92,6 +99,16 @@ impl From<ts::Error> for NonFatalError {
     }
 }
 
+impl From<tokio::task::JoinError> for NonFatalError {
+    fn from(err: tokio::task::JoinError) -> Self {
+        if err.is_cancelled() {
+            Self::Cancelled
+        } else {
+            Self::UnknownError
+        }
+    }
+}
+
 impl Into<common::ErrorCode> for NonFatalError {
     fn into(self) -> common::ErrorCode {
         match self {
@@ -109,7 +126,8 @@ impl Into<common::ErrorCode> for NonFatalError {
 pub enum HighlightOutput {
     Success {
         ident: u16,
-        filename: Arc<str>, // don't LOVE the Arc but lifetimes become quite difficult without them
+        // don't LOVE the Arc but lifetimes become quite difficult without them
+        filename: Arc<str>,
         language: languages::SharedConfig,
         lines: Vec<String>,
     },
@@ -205,7 +223,7 @@ fn highlight(
         };
     };
 
-    let result: Result<_, tree_sitter_highlight::Error> = ThreadState::with(|pt| {
+    let result: Result<_, ts::Error> = ThreadState::for_highlighting(|pt| {
         let iter = {
             let _span = tracing::trace_span!("highlight_with_tree_sitter").entered();
             pt.highlighter.highlight(
@@ -227,7 +245,6 @@ fn highlight(
         pt.renderer.render(iter, &contents, &callback)?;
         Ok(pt.renderer.lines().map(String::from).collect())
     });
-
 
     match result {
         Ok(lines) => HighlightOutput::Success {
@@ -252,7 +269,7 @@ fn highlight(
 
 #[instrument(skip(state, body), fields(num_files, timeout_ms, request_size = body.len()))]
 pub async fn html_handler(
-    extract::State(state): extract::State<Daylight>,
+    extract::State(state): extract::State<Server>,
     body: Bytes,
 ) -> Result<axum::response::Response, FatalError> {
     let request = flatbuffers::root::<html::Request>(&body)?;
@@ -279,59 +296,64 @@ pub async fn html_handler(
     // This is the heart of the app: efficiently enqueuing concurrent highlighting requests,
     // propagating cancellation signals, and returning them in a stream, without
     // starving the tokio event loop and while processing as many documents as possible.
+    // Though this is technically a streaming problem, FuturesUnordered seems to provide
+    // drastically better performance than writing this with futures::stream::iter().
     let tasks: FuturesUnordered<_> = files
         .iter()
         .map(|file| {
             let ident = file.ident();
             let filename: Arc<str> = file.filename().unwrap_or_default().into();
-            let mut language: Option<languages::SharedConfig> = None;
-            // body.clone() here is not a full memory copy, because Bytes is cheap to clone
-            let contents =
-                match prepare_file_contents(&file, body.clone(), filename.clone(), &mut language) {
-                    Ok(ok) => ok,
-                    Err(e) => {
-                        return futures::future::ready(HighlightOutput::Failure {
-                            ident,
-                            filename,
-                            language,
-                            reason: e,
-                        })
-                        .left_future()
-                    }
-                };
-
-            // Clone the cancellation flag and filename for error handlers
-            let cancellation_flag = timeout_flag.clone();
-            let cancellation_flag_for_timeout = cancellation_flag.clone();
-            let filename_for_join_error = filename.clone();
-            let filename_for_timeout = filename.clone();
+            let body = body.clone(); // not a full memory copy, Bytes has zero-cost clone()
+            let timeout_flag = timeout_flag.clone();
             let include_injections = file.include_injections();
 
-            // Spawn a blocking task for highlighting this file
-            let task = tokio::task::spawn_blocking(move || {
-                highlight(ident, filename, language, contents, include_injections, cancellation_flag)
-            })
-            .map(move |t| {
-                // Fail gracefully if there was an error joining the thread
-                // TODO: figure out how to signal this in a trace
-                t.unwrap_or_else(|err| {
-                    tracing::warn!("Join error encountered, this is upsetting: {err}");
-                    HighlightOutput::Failure {
+            async move {
+                let mut language: Option<languages::SharedConfig> = None;
+                let contents =
+                    match prepare_file_contents(&file, body, filename.clone(), &mut language) {
+                        Ok(ok) => ok,
+                        Err(reason) => {
+                            return HighlightOutput::Failure { ident, filename, language, reason };
+                        }
+                    };
+
+                // Clones are needed for error handling paths (but are cheap, because these are Arcs).
+                let cancellation_flag = timeout_flag.clone();
+                let cancellation_flag_for_timeout = cancellation_flag.clone();
+                let filename_for_join_error = filename.clone();
+                let filename_for_timeout = filename.clone();
+
+                // Spawn a blocking task for highlighting this file
+                let task = tokio::task::spawn_blocking(move || {
+                    highlight(
                         ident,
-                        filename: filename_for_join_error,
+                        filename,
                         language,
-                        reason: if err.is_cancelled() {
-                            NonFatalError::Cancelled
-                        } else {
-                            NonFatalError::ThreadError
-                        },
-                    }
+                        contents,
+                        include_injections,
+                        cancellation_flag,
+                    )
                 })
-            });
-            // Run the task with the specified timeout
-            tokio::time::timeout(timeout, task)
-                .map(move |result| {
-                    result.unwrap_or_else(|_elapsed| {
+                .map(move |t| {
+                    // Thread-join errors are unlikely but possible
+                    t.unwrap_or_else(|err| {
+                        tracing::warn!("Join error encountered, this is upsetting: {err}");
+                        tracing::Span::current().set_status(trace::Status::Error {
+                            description: "threading error".into(),
+                        });
+                        HighlightOutput::Failure {
+                            ident,
+                            filename: filename_for_join_error,
+                            language,
+                            reason: err.into(),
+                        }
+                    })
+                });
+
+                // Run the task with the specified timeout
+                tokio::time::timeout(timeout, task)
+                    .await
+                    .unwrap_or_else(|_elapsed| {
                         // Timeout occurred - set the cancellation flag so inflight tree-sitter-side tasks
                         // know that they should cancel and return.
                         cancellation_flag_for_timeout.store(1, Ordering::SeqCst);
@@ -342,8 +364,7 @@ pub async fn html_handler(
                             reason: NonFatalError::TimedOut,
                         }
                     })
-                })
-                .right_future()
+            }
         })
         .collect();
     // Wait on all in-flight tasks simultaneously with .collect() and build a response.
@@ -354,52 +375,40 @@ pub async fn html_handler(
 fn build_response(
     doc_results: Vec<HighlightOutput>,
 ) -> Result<axum::response::Response, FatalError> {
-    let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(1024);
-
-    // Build documents
-    let documents: Vec<_> = doc_results
-        .into_iter()
-        .map(|doc| {
-            let filename = builder.create_string(doc.filename());
-
-            let lines = match doc {
-                HighlightOutput::Success { ref lines, .. } => lines
-                    .iter()
-                    .map(|line| builder.create_string(line))
-                    .collect(),
-                _ => vec![],
-            };
-
-            let lines_vec = builder.create_vector(&lines);
-
-            html::Document::create(
-                &mut builder,
-                &html::DocumentArgs {
-                    ident: doc.ident(),
-                    filename: Some(filename),
-                    language: doc.language(),
-                    lines: Some(lines_vec),
-                    error_code: doc.error_code(),
-                },
-            )
-        })
-        .collect();
-
-    let documents_vec = builder.create_vector(&documents);
-
-    // Build response
-    let fb_response = html::Response::create(
-        &mut builder,
-        &html::ResponseArgs {
-            documents: Some(documents_vec),
-        },
-    );
-
-    builder.finish(fb_response, None);
-    let response_bytes = builder.finished_data();
-
-    // Use Bytes::copy_from_slice to create a response without extra allocation
-    Ok((StatusCode::OK, Bytes::copy_from_slice(response_bytes)).into_response())
+    ThreadState::for_building(|mut builder| {
+        builder.reset();
+        let documents: Vec<_> = doc_results
+            .into_iter()
+            .map(|doc| {
+                let filename = builder.create_string(doc.filename());
+                let lines = match doc {
+                    HighlightOutput::Success { ref lines, .. } => {
+                        let line_offsets: Vec<_> = lines
+                            .into_iter()
+                            .map(|line| builder.create_string(line))
+                            .collect();
+                        Some(builder.create_vector(&line_offsets))
+                    }
+                    _ => None,
+                };
+                html::Document::create(
+                    &mut builder,
+                    &html::DocumentArgs {
+                        ident: doc.ident(),
+                        filename: Some(filename),
+                        language: doc.language(),
+                        lines,
+                        error_code: doc.error_code(),
+                    },
+                )
+            })
+            .collect();
+        let documents = Some(builder.create_vector(&documents));
+        let response = html::Response::create(&mut builder, &html::ResponseArgs { documents });
+        builder.finish(response, None);
+        let response_bytes = builder.finished_data();
+        Ok((StatusCode::OK, Bytes::copy_from_slice(response_bytes)).into_response())
+    })
 }
 
 async fn health_handler() -> &'static str {
@@ -419,12 +428,8 @@ async fn shutdown_signal() {
             .await;
     };
     tokio::select! {
-        _ = ctrl_c => {
-            tracing::info!("Received SIGINT (Ctrl+C), starting graceful shutdown");
-        },
-        _ = terminate => {
-            tracing::info!("Received SIGTERM, starting graceful shutdown");
-        },
+        _ = ctrl_c => { tracing::info!("Received SIGINT (Ctrl+C), starting graceful shutdown") },
+        _ = terminate => { tracing::info!("Received SIGTERM, starting graceful shutdown") },
     }
 }
 
@@ -432,7 +437,7 @@ async fn shutdown_signal() {
 
 /// Build a router for a Daylight application.
 pub fn router(default_per_file_timeout: Duration, max_per_file_timeout: Duration) -> Router {
-    let state = Daylight {
+    let state = Server {
         default_per_file_timeout,
         max_per_file_timeout,
     };
