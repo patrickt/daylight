@@ -211,6 +211,7 @@ fn highlight(
                 &language.ts_config,
                 &contents,
                 Some(&cancellation_flag),
+                // This is exceptionally slow (like 3x slower). Do we want to make injection a property of the request?
                 |s| languages::from_name(s).map(|s| &s.ts_config),
             )
         }?;
