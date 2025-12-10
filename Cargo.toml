@@ -24,7 +24,6 @@ path = "bin/stress-test.rs"
 [dependencies]
 anyhow = "1"
 axum = "0.7"
-axum-tracing-opentelemetry = "0.32.2"
 bytes = "1"
 clap = { version = "4", features = ["derive", "env"] }
 flatbuffers = "24.3.25"
@@ -48,10 +47,12 @@ tower = "^0.5"
 tokio = { version = "1", features = ["net", "rt-multi-thread", "macros", "time", "signal"]}
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
-tracing-opentelemetry = { version = "0.32", features = ["metrics"] }
-opentelemetry = { version = "0.31" }
+tracing-opentelemetry = "0.32"
+tracing-opentelemetry-instrumentation-sdk = "0.32"
+init-tracing-opentelemetry = { version = "0.34", features = ["otlp", "tracing_subscriber_ext"] }
+axum-tracing-opentelemetry = "0.32"
+opentelemetry = "0.31"
 opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"] }
-opentelemetry-otlp = { version = "0.31" }
 tree-sitter = "0.25.10"
 tree-sitter-agda = "1.3.0"
 tree-sitter-bash = "0.25.1"
