@@ -29,10 +29,10 @@ pub mod common {
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
 pub const ENUM_MIN_LANGUAGE: u16 = 0;
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
-pub const ENUM_MAX_LANGUAGE: u16 = 15;
+pub const ENUM_MAX_LANGUAGE: u16 = 16;
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
 #[allow(non_camel_case_types)]
-pub const ENUM_VALUES_LANGUAGE: [Language; 16] = [
+pub const ENUM_VALUES_LANGUAGE: [Language; 17] = [
   Language::Unspecified,
   Language::Agda,
   Language::Bash,
@@ -44,6 +44,7 @@ pub const ENUM_VALUES_LANGUAGE: [Language; 16] = [
   Language::Java,
   Language::JavaScript,
   Language::Json,
+  Language::Jsx,
   Language::Python,
   Language::Ruby,
   Language::Rust,
@@ -67,14 +68,15 @@ impl Language {
   pub const Java: Self = Self(8);
   pub const JavaScript: Self = Self(9);
   pub const Json: Self = Self(10);
-  pub const Python: Self = Self(11);
-  pub const Ruby: Self = Self(12);
-  pub const Rust: Self = Self(13);
-  pub const TypeScript: Self = Self(14);
-  pub const Tsx: Self = Self(15);
+  pub const Jsx: Self = Self(11);
+  pub const Python: Self = Self(12);
+  pub const Ruby: Self = Self(13);
+  pub const Rust: Self = Self(14);
+  pub const TypeScript: Self = Self(15);
+  pub const Tsx: Self = Self(16);
 
   pub const ENUM_MIN: u16 = 0;
-  pub const ENUM_MAX: u16 = 15;
+  pub const ENUM_MAX: u16 = 16;
   pub const ENUM_VALUES: &'static [Self] = &[
     Self::Unspecified,
     Self::Agda,
@@ -87,6 +89,7 @@ impl Language {
     Self::Java,
     Self::JavaScript,
     Self::Json,
+    Self::Jsx,
     Self::Python,
     Self::Ruby,
     Self::Rust,
@@ -107,6 +110,7 @@ impl Language {
       Self::Java => Some("Java"),
       Self::JavaScript => Some("JavaScript"),
       Self::Json => Some("Json"),
+      Self::Jsx => Some("Jsx"),
       Self::Python => Some("Python"),
       Self::Ruby => Some("Ruby"),
       Self::Rust => Some("Rust"),

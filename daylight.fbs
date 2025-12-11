@@ -12,11 +12,12 @@ enum Language : uint16 {
   Java = 8,
   JavaScript = 9,
   Json = 10,
-  Python = 11,
-  Ruby = 12,
-  Rust = 13,
-  TypeScript = 14,
-  Tsx = 15,
+  Jsx = 11,
+  Python = 12,
+  Ruby = 13,
+  Rust = 14,
+  TypeScript = 15,
+  Tsx = 16,
 }
 
 enum ErrorCode : byte {

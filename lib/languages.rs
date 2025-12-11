@@ -178,6 +178,16 @@ language!(
     &["json"]
 );
 language!(
+    JSX,
+    FbLanguage::Jsx,
+    tree_sitter_javascript::LANGUAGE,
+    "jsx",
+    tree_sitter_javascript::JSX_HIGHLIGHT_QUERY,
+    tree_sitter_javascript::INJECTIONS_QUERY,
+    tree_sitter_javascript::LOCALS_QUERY,
+    &["jsx"]
+);
+language!(
     PYTHON,
     FbLanguage::Python,
     tree_sitter_python::LANGUAGE,
@@ -256,6 +266,7 @@ fn all_languages() -> impl Iterator<Item = &'static Config> {
         &*JAVA,
         &*JAVASCRIPT,
         &*JSON,
+        &*JSX,
         &*PYTHON,
         &*RUBY,
         &*RUST,
@@ -294,6 +305,7 @@ impl TryFrom<FbLanguage> for &'static Config {
             FbLanguage::Java => Ok(&*JAVA),
             FbLanguage::JavaScript => Ok(&*JAVASCRIPT),
             FbLanguage::Json => Ok(&*JSON),
+            FbLanguage::Jsx => Ok(&*JSX),
             FbLanguage::Python => Ok(&*PYTHON),
             FbLanguage::Ruby => Ok(&*RUBY),
             FbLanguage::Rust => Ok(&*RUST),
