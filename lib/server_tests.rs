@@ -1,5 +1,6 @@
 use crate::daylight_generated::daylight::common;
 use crate::daylight_generated::daylight::html;
+use crate::processors::HtmlProcessor;
 use crate::server::*;
 use axum::body::Bytes;
 use axum::extract::State;
@@ -7,6 +8,14 @@ use http::StatusCode;
 use quickcheck::TestResult;
 use quickcheck_macros::quickcheck;
 use tokio::time::Duration;
+
+// Helper alias for the HTML handler
+async fn html_handler(
+    state: State<Server>,
+    body: Bytes,
+) -> Result<axum::response::Response, crate::errors::FatalError> {
+    generic_handler::<HtmlProcessor>(state, body).await
+}
 
 // Helper to create a FlatBuffers request with given files
 fn build_request(files: Vec<(u16, &str, &str, common::Language)>) -> Vec<u8> {
@@ -17,14 +26,15 @@ fn build_request(files: Vec<(u16, &str, &str, common::Language)>) -> Vec<u8> {
         .map(|(ident, filename, contents, lang)| {
             let filename_offset = builder.create_string(filename);
             let contents_offset = builder.create_vector(contents.as_bytes());
-            html::File::create(
+            common::File::create(
                 &mut builder,
-                &html::FileArgs {
+                &common::FileArgs {
                     ident: *ident,
                     filename: Some(filename_offset),
                     contents: Some(contents_offset),
-                    options: None,
+                    include_injections: false,
                     language: *lang,
+                    options: None,
                 },
             )
         })
@@ -169,7 +179,7 @@ async fn test_timeout_too_large() {
     };
 
     let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(1024);
-    let files_vec = builder.create_vector::<flatbuffers::WIPOffset<html::File>>(&[]);
+    let files_vec = builder.create_vector::<flatbuffers::WIPOffset<common::File>>(&[]);
     let request = html::Request::create(
         &mut builder,
         &html::RequestArgs {

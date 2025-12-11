@@ -27,8 +27,6 @@ enum ErrorCode : byte {
   UnknownError = 4,
 }
 
-namespace daylight.html;
-
 /// A file to be highlighted.
 table File {
   /// A unique numeric identifier used to correlate files in a request with files in a response.
@@ -43,7 +41,7 @@ table File {
   /// The language for this to use. If this is unspecified, the server will make an attempt to
   /// infer the language based on its filename. If that is unsuccessful, the file is considered
   /// bad and a Failure will be returned.
-  language: daylight.common.Language;
+  language: Language;
   /// Whether or not to allow injections of other grammars (like Ruby source code when highlighting .erb files).
   /// If true, this can produce richer output, but comes with a speed cost.
   include_injections: bool;
@@ -51,9 +49,11 @@ table File {
   options: [string];
 }
 
+namespace daylight.html;
+
 /// A request to highlight some files as HTML.
 table Request {
-  files: [File];
+  files: [daylight.common.File];
   /// The maximum time a file is allowed to take. If zero or not provided, the server may choose a timeout.
   /// Passing a size larger than the server's supported per-file timeout produces a `400 Bad Request`.
   timeout_ms: uint64;
@@ -76,5 +76,31 @@ table Document {
   /// Lines of HTML. If `error_code` is not NoError, this will be empty.
   lines: [string];
   /// If no error occurred, the code will be NoError. Natch.
+  error_code: daylight.common.ErrorCode;
+}
+
+namespace daylight.spans;
+
+table Request {
+  files: [daylight.common.File];
+  timeout_ms: uint64;
+}
+
+table Response {
+  highlight_names: [string];
+  documents: [Document];
+}
+
+table Span {
+  index: uint16;
+  start: uint64;
+  end: uint64;
+}
+
+table Document {
+  ident: uint16;
+  filename: string;
+  language: daylight.common.Language;
+  spans: [Span];
   error_code: daylight.common.ErrorCode;
 }

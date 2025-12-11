@@ -75,9 +75,9 @@ async fn main() -> anyhow::Result<()> {
         let filename_offset = builder.create_string(filename);
         let contents_offset = builder.create_vector(&contents);
 
-        let file = File::create(
+        let file = common::File::create(
             &mut builder,
-            &FileArgs {
+            &common::FileArgs {
                 ident: idx as u16,
                 filename: Some(filename_offset),
                 contents: Some(contents_offset),

@@ -264,17 +264,6 @@ impl<'a> flatbuffers::Verifiable for ErrorCode {
 }
 
 impl flatbuffers::SimpleToVerifyInSlice for ErrorCode {}
-}  // pub mod common
-
-#[allow(unused_imports, dead_code)]
-pub mod html {
-
-  use core::mem;
-  use core::cmp::Ordering;
-
-  extern crate flatbuffers;
-  use self::flatbuffers::{EndianScalar, Follow};
-
 pub enum FileOffset {}
 #[derive(Copy, Clone, PartialEq)]
 
@@ -350,11 +339,11 @@ impl<'a> File<'a> {
   /// infer the language based on its filename. If that is unsuccessful, the file is considered
   /// bad and a Failure will be returned.
   #[inline]
-  pub fn language(&self) -> super::common::Language {
+  pub fn language(&self) -> Language {
     // Safety:
     // Created from valid Table for this object
     // which contains a valid value in this slot
-    unsafe { self._tab.get::<super::common::Language>(File::VT_LANGUAGE, Some(super::common::Language::Unspecified)).unwrap()}
+    unsafe { self._tab.get::<Language>(File::VT_LANGUAGE, Some(Language::Unspecified)).unwrap()}
   }
   /// Whether or not to allow injections of other grammars (like Ruby source code when highlighting .erb files).
   /// If true, this can produce richer output, but comes with a speed cost.
@@ -385,7 +374,7 @@ impl flatbuffers::Verifiable for File<'_> {
      .visit_field::<u16>("ident", Self::VT_IDENT, false)?
      .visit_field::<flatbuffers::ForwardsUOffset<&str>>("filename", Self::VT_FILENAME, false)?
      .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>("contents", Self::VT_CONTENTS, false)?
-     .visit_field::<super::common::Language>("language", Self::VT_LANGUAGE, false)?
+     .visit_field::<Language>("language", Self::VT_LANGUAGE, false)?
      .visit_field::<bool>("include_injections", Self::VT_INCLUDE_INJECTIONS, false)?
      .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<&'_ str>>>>("options", Self::VT_OPTIONS, false)?
      .finish();
@@ -396,7 +385,7 @@ pub struct FileArgs<'a> {
     pub ident: u16,
     pub filename: Option<flatbuffers::WIPOffset<&'a str>>,
     pub contents: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u8>>>,
-    pub language: super::common::Language,
+    pub language: Language,
     pub include_injections: bool,
     pub options: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<&'a str>>>>,
 }
@@ -407,7 +396,7 @@ impl<'a> Default for FileArgs<'a> {
       ident: 0,
       filename: None,
       contents: None,
-      language: super::common::Language::Unspecified,
+      language: Language::Unspecified,
       include_injections: false,
       options: None,
     }
@@ -432,8 +421,8 @@ impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> FileBuilder<'a, 'b, A> {
     self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(File::VT_CONTENTS, contents);
   }
   #[inline]
-  pub fn add_language(&mut self, language: super::common::Language) {
-    self.fbb_.push_slot::<super::common::Language>(File::VT_LANGUAGE, language, super::common::Language::Unspecified);
+  pub fn add_language(&mut self, language: Language) {
+    self.fbb_.push_slot::<Language>(File::VT_LANGUAGE, language, Language::Unspecified);
   }
   #[inline]
   pub fn add_include_injections(&mut self, include_injections: bool) {
@@ -470,6 +459,17 @@ impl core::fmt::Debug for File<'_> {
       ds.finish()
   }
 }
+}  // pub mod common
+
+#[allow(unused_imports, dead_code)]
+pub mod html {
+
+  use core::mem;
+  use core::cmp::Ordering;
+
+  extern crate flatbuffers;
+  use self::flatbuffers::{EndianScalar, Follow};
+
 pub enum RequestOffset {}
 #[derive(Copy, Clone, PartialEq)]
 
@@ -507,11 +507,11 @@ impl<'a> Request<'a> {
 
 
   #[inline]
-  pub fn files(&self) -> Option<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<File<'a>>>> {
+  pub fn files(&self) -> Option<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<super::common::File<'a>>>> {
     // Safety:
     // Created from valid Table for this object
     // which contains a valid value in this slot
-    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<File>>>>(Request::VT_FILES, None)}
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<super::common::File>>>>(Request::VT_FILES, None)}
   }
   /// The maximum time a file is allowed to take. If zero or not provided, the server may choose a timeout.
   /// Passing a size larger than the server's supported per-file timeout produces a `400 Bad Request`.
@@ -531,14 +531,14 @@ impl flatbuffers::Verifiable for Request<'_> {
   ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
     use self::flatbuffers::Verifiable;
     v.visit_table(pos)?
-     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<File>>>>("files", Self::VT_FILES, false)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<super::common::File>>>>("files", Self::VT_FILES, false)?
      .visit_field::<u64>("timeout_ms", Self::VT_TIMEOUT_MS, false)?
      .finish();
     Ok(())
   }
 }
 pub struct RequestArgs<'a> {
-    pub files: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<File<'a>>>>>,
+    pub files: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<super::common::File<'a>>>>>,
     pub timeout_ms: u64,
 }
 impl<'a> Default for RequestArgs<'a> {
@@ -557,7 +557,7 @@ pub struct RequestBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
 }
 impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> RequestBuilder<'a, 'b, A> {
   #[inline]
-  pub fn add_files(&mut self, files: flatbuffers::WIPOffset<flatbuffers::Vector<'b , flatbuffers::ForwardsUOffset<File<'b >>>>) {
+  pub fn add_files(&mut self, files: flatbuffers::WIPOffset<flatbuffers::Vector<'b , flatbuffers::ForwardsUOffset<super::common::File<'b >>>>) {
     self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(Request::VT_FILES, files);
   }
   #[inline]
@@ -858,5 +858,540 @@ impl core::fmt::Debug for Document<'_> {
   }
 }
 }  // pub mod html
+
+#[allow(unused_imports, dead_code)]
+pub mod spans {
+
+  use core::mem;
+  use core::cmp::Ordering;
+
+  extern crate flatbuffers;
+  use self::flatbuffers::{EndianScalar, Follow};
+
+pub enum RequestOffset {}
+#[derive(Copy, Clone, PartialEq)]
+
+pub struct Request<'a> {
+  pub _tab: flatbuffers::Table<'a>,
+}
+
+impl<'a> flatbuffers::Follow<'a> for Request<'a> {
+  type Inner = Request<'a>;
+  #[inline]
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
+  }
+}
+
+impl<'a> Request<'a> {
+  pub const VT_FILES: flatbuffers::VOffsetT = 4;
+  pub const VT_TIMEOUT_MS: flatbuffers::VOffsetT = 6;
+
+  #[inline]
+  pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    Request { _tab: table }
+  }
+  #[allow(unused_mut)]
+  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: flatbuffers::Allocator + 'bldr>(
+    _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+    args: &'args RequestArgs<'args>
+  ) -> flatbuffers::WIPOffset<Request<'bldr>> {
+    let mut builder = RequestBuilder::new(_fbb);
+    builder.add_timeout_ms(args.timeout_ms);
+    if let Some(x) = args.files { builder.add_files(x); }
+    builder.finish()
+  }
+
+
+  #[inline]
+  pub fn files(&self) -> Option<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<super::common::File<'a>>>> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<super::common::File>>>>(Request::VT_FILES, None)}
+  }
+  #[inline]
+  pub fn timeout_ms(&self) -> u64 {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<u64>(Request::VT_TIMEOUT_MS, Some(0)).unwrap()}
+  }
+}
+
+impl flatbuffers::Verifiable for Request<'_> {
+  #[inline]
+  fn run_verifier(
+    v: &mut flatbuffers::Verifier, pos: usize
+  ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+    use self::flatbuffers::Verifiable;
+    v.visit_table(pos)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<super::common::File>>>>("files", Self::VT_FILES, false)?
+     .visit_field::<u64>("timeout_ms", Self::VT_TIMEOUT_MS, false)?
+     .finish();
+    Ok(())
+  }
+}
+pub struct RequestArgs<'a> {
+    pub files: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<super::common::File<'a>>>>>,
+    pub timeout_ms: u64,
+}
+impl<'a> Default for RequestArgs<'a> {
+  #[inline]
+  fn default() -> Self {
+    RequestArgs {
+      files: None,
+      timeout_ms: 0,
+    }
+  }
+}
+
+pub struct RequestBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+  fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+  start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+}
+impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> RequestBuilder<'a, 'b, A> {
+  #[inline]
+  pub fn add_files(&mut self, files: flatbuffers::WIPOffset<flatbuffers::Vector<'b , flatbuffers::ForwardsUOffset<super::common::File<'b >>>>) {
+    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(Request::VT_FILES, files);
+  }
+  #[inline]
+  pub fn add_timeout_ms(&mut self, timeout_ms: u64) {
+    self.fbb_.push_slot::<u64>(Request::VT_TIMEOUT_MS, timeout_ms, 0);
+  }
+  #[inline]
+  pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> RequestBuilder<'a, 'b, A> {
+    let start = _fbb.start_table();
+    RequestBuilder {
+      fbb_: _fbb,
+      start_: start,
+    }
+  }
+  #[inline]
+  pub fn finish(self) -> flatbuffers::WIPOffset<Request<'a>> {
+    let o = self.fbb_.end_table(self.start_);
+    flatbuffers::WIPOffset::new(o.value())
+  }
+}
+
+impl core::fmt::Debug for Request<'_> {
+  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    let mut ds = f.debug_struct("Request");
+      ds.field("files", &self.files());
+      ds.field("timeout_ms", &self.timeout_ms());
+      ds.finish()
+  }
+}
+pub enum ResponseOffset {}
+#[derive(Copy, Clone, PartialEq)]
+
+pub struct Response<'a> {
+  pub _tab: flatbuffers::Table<'a>,
+}
+
+impl<'a> flatbuffers::Follow<'a> for Response<'a> {
+  type Inner = Response<'a>;
+  #[inline]
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
+  }
+}
+
+impl<'a> Response<'a> {
+  pub const VT_HIGHLIGHT_NAMES: flatbuffers::VOffsetT = 4;
+  pub const VT_DOCUMENTS: flatbuffers::VOffsetT = 6;
+
+  #[inline]
+  pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    Response { _tab: table }
+  }
+  #[allow(unused_mut)]
+  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: flatbuffers::Allocator + 'bldr>(
+    _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+    args: &'args ResponseArgs<'args>
+  ) -> flatbuffers::WIPOffset<Response<'bldr>> {
+    let mut builder = ResponseBuilder::new(_fbb);
+    if let Some(x) = args.documents { builder.add_documents(x); }
+    if let Some(x) = args.highlight_names { builder.add_highlight_names(x); }
+    builder.finish()
+  }
+
+
+  #[inline]
+  pub fn highlight_names(&self) -> Option<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<&'a str>>> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<&'a str>>>>(Response::VT_HIGHLIGHT_NAMES, None)}
+  }
+  #[inline]
+  pub fn documents(&self) -> Option<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<Document<'a>>>> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<Document>>>>(Response::VT_DOCUMENTS, None)}
+  }
+}
+
+impl flatbuffers::Verifiable for Response<'_> {
+  #[inline]
+  fn run_verifier(
+    v: &mut flatbuffers::Verifier, pos: usize
+  ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+    use self::flatbuffers::Verifiable;
+    v.visit_table(pos)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<&'_ str>>>>("highlight_names", Self::VT_HIGHLIGHT_NAMES, false)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<Document>>>>("documents", Self::VT_DOCUMENTS, false)?
+     .finish();
+    Ok(())
+  }
+}
+pub struct ResponseArgs<'a> {
+    pub highlight_names: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<&'a str>>>>,
+    pub documents: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<Document<'a>>>>>,
+}
+impl<'a> Default for ResponseArgs<'a> {
+  #[inline]
+  fn default() -> Self {
+    ResponseArgs {
+      highlight_names: None,
+      documents: None,
+    }
+  }
+}
+
+pub struct ResponseBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+  fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+  start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+}
+impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> ResponseBuilder<'a, 'b, A> {
+  #[inline]
+  pub fn add_highlight_names(&mut self, highlight_names: flatbuffers::WIPOffset<flatbuffers::Vector<'b , flatbuffers::ForwardsUOffset<&'b  str>>>) {
+    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(Response::VT_HIGHLIGHT_NAMES, highlight_names);
+  }
+  #[inline]
+  pub fn add_documents(&mut self, documents: flatbuffers::WIPOffset<flatbuffers::Vector<'b , flatbuffers::ForwardsUOffset<Document<'b >>>>) {
+    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(Response::VT_DOCUMENTS, documents);
+  }
+  #[inline]
+  pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> ResponseBuilder<'a, 'b, A> {
+    let start = _fbb.start_table();
+    ResponseBuilder {
+      fbb_: _fbb,
+      start_: start,
+    }
+  }
+  #[inline]
+  pub fn finish(self) -> flatbuffers::WIPOffset<Response<'a>> {
+    let o = self.fbb_.end_table(self.start_);
+    flatbuffers::WIPOffset::new(o.value())
+  }
+}
+
+impl core::fmt::Debug for Response<'_> {
+  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    let mut ds = f.debug_struct("Response");
+      ds.field("highlight_names", &self.highlight_names());
+      ds.field("documents", &self.documents());
+      ds.finish()
+  }
+}
+pub enum SpanOffset {}
+#[derive(Copy, Clone, PartialEq)]
+
+pub struct Span<'a> {
+  pub _tab: flatbuffers::Table<'a>,
+}
+
+impl<'a> flatbuffers::Follow<'a> for Span<'a> {
+  type Inner = Span<'a>;
+  #[inline]
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
+  }
+}
+
+impl<'a> Span<'a> {
+  pub const VT_INDEX: flatbuffers::VOffsetT = 4;
+  pub const VT_START: flatbuffers::VOffsetT = 6;
+  pub const VT_END: flatbuffers::VOffsetT = 8;
+
+  #[inline]
+  pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    Span { _tab: table }
+  }
+  #[allow(unused_mut)]
+  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: flatbuffers::Allocator + 'bldr>(
+    _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+    args: &'args SpanArgs
+  ) -> flatbuffers::WIPOffset<Span<'bldr>> {
+    let mut builder = SpanBuilder::new(_fbb);
+    builder.add_end(args.end);
+    builder.add_start(args.start);
+    builder.add_index(args.index);
+    builder.finish()
+  }
+
+
+  #[inline]
+  pub fn index(&self) -> u16 {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<u16>(Span::VT_INDEX, Some(0)).unwrap()}
+  }
+  #[inline]
+  pub fn start(&self) -> u64 {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<u64>(Span::VT_START, Some(0)).unwrap()}
+  }
+  #[inline]
+  pub fn end(&self) -> u64 {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<u64>(Span::VT_END, Some(0)).unwrap()}
+  }
+}
+
+impl flatbuffers::Verifiable for Span<'_> {
+  #[inline]
+  fn run_verifier(
+    v: &mut flatbuffers::Verifier, pos: usize
+  ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+    use self::flatbuffers::Verifiable;
+    v.visit_table(pos)?
+     .visit_field::<u16>("index", Self::VT_INDEX, false)?
+     .visit_field::<u64>("start", Self::VT_START, false)?
+     .visit_field::<u64>("end", Self::VT_END, false)?
+     .finish();
+    Ok(())
+  }
+}
+pub struct SpanArgs {
+    pub index: u16,
+    pub start: u64,
+    pub end: u64,
+}
+impl<'a> Default for SpanArgs {
+  #[inline]
+  fn default() -> Self {
+    SpanArgs {
+      index: 0,
+      start: 0,
+      end: 0,
+    }
+  }
+}
+
+pub struct SpanBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+  fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+  start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+}
+impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> SpanBuilder<'a, 'b, A> {
+  #[inline]
+  pub fn add_index(&mut self, index: u16) {
+    self.fbb_.push_slot::<u16>(Span::VT_INDEX, index, 0);
+  }
+  #[inline]
+  pub fn add_start(&mut self, start: u64) {
+    self.fbb_.push_slot::<u64>(Span::VT_START, start, 0);
+  }
+  #[inline]
+  pub fn add_end(&mut self, end: u64) {
+    self.fbb_.push_slot::<u64>(Span::VT_END, end, 0);
+  }
+  #[inline]
+  pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> SpanBuilder<'a, 'b, A> {
+    let start = _fbb.start_table();
+    SpanBuilder {
+      fbb_: _fbb,
+      start_: start,
+    }
+  }
+  #[inline]
+  pub fn finish(self) -> flatbuffers::WIPOffset<Span<'a>> {
+    let o = self.fbb_.end_table(self.start_);
+    flatbuffers::WIPOffset::new(o.value())
+  }
+}
+
+impl core::fmt::Debug for Span<'_> {
+  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    let mut ds = f.debug_struct("Span");
+      ds.field("index", &self.index());
+      ds.field("start", &self.start());
+      ds.field("end", &self.end());
+      ds.finish()
+  }
+}
+pub enum DocumentOffset {}
+#[derive(Copy, Clone, PartialEq)]
+
+pub struct Document<'a> {
+  pub _tab: flatbuffers::Table<'a>,
+}
+
+impl<'a> flatbuffers::Follow<'a> for Document<'a> {
+  type Inner = Document<'a>;
+  #[inline]
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
+  }
+}
+
+impl<'a> Document<'a> {
+  pub const VT_IDENT: flatbuffers::VOffsetT = 4;
+  pub const VT_FILENAME: flatbuffers::VOffsetT = 6;
+  pub const VT_LANGUAGE: flatbuffers::VOffsetT = 8;
+  pub const VT_SPANS: flatbuffers::VOffsetT = 10;
+  pub const VT_ERROR_CODE: flatbuffers::VOffsetT = 12;
+
+  #[inline]
+  pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    Document { _tab: table }
+  }
+  #[allow(unused_mut)]
+  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: flatbuffers::Allocator + 'bldr>(
+    _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+    args: &'args DocumentArgs<'args>
+  ) -> flatbuffers::WIPOffset<Document<'bldr>> {
+    let mut builder = DocumentBuilder::new(_fbb);
+    if let Some(x) = args.spans { builder.add_spans(x); }
+    if let Some(x) = args.filename { builder.add_filename(x); }
+    builder.add_language(args.language);
+    builder.add_ident(args.ident);
+    builder.add_error_code(args.error_code);
+    builder.finish()
+  }
+
+
+  #[inline]
+  pub fn ident(&self) -> u16 {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<u16>(Document::VT_IDENT, Some(0)).unwrap()}
+  }
+  #[inline]
+  pub fn filename(&self) -> Option<&'a str> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<&str>>(Document::VT_FILENAME, None)}
+  }
+  #[inline]
+  pub fn language(&self) -> super::common::Language {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<super::common::Language>(Document::VT_LANGUAGE, Some(super::common::Language::Unspecified)).unwrap()}
+  }
+  #[inline]
+  pub fn spans(&self) -> Option<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<Span<'a>>>> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<Span>>>>(Document::VT_SPANS, None)}
+  }
+  #[inline]
+  pub fn error_code(&self) -> super::common::ErrorCode {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<super::common::ErrorCode>(Document::VT_ERROR_CODE, Some(super::common::ErrorCode::NoError)).unwrap()}
+  }
+}
+
+impl flatbuffers::Verifiable for Document<'_> {
+  #[inline]
+  fn run_verifier(
+    v: &mut flatbuffers::Verifier, pos: usize
+  ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+    use self::flatbuffers::Verifiable;
+    v.visit_table(pos)?
+     .visit_field::<u16>("ident", Self::VT_IDENT, false)?
+     .visit_field::<flatbuffers::ForwardsUOffset<&str>>("filename", Self::VT_FILENAME, false)?
+     .visit_field::<super::common::Language>("language", Self::VT_LANGUAGE, false)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<Span>>>>("spans", Self::VT_SPANS, false)?
+     .visit_field::<super::common::ErrorCode>("error_code", Self::VT_ERROR_CODE, false)?
+     .finish();
+    Ok(())
+  }
+}
+pub struct DocumentArgs<'a> {
+    pub ident: u16,
+    pub filename: Option<flatbuffers::WIPOffset<&'a str>>,
+    pub language: super::common::Language,
+    pub spans: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<Span<'a>>>>>,
+    pub error_code: super::common::ErrorCode,
+}
+impl<'a> Default for DocumentArgs<'a> {
+  #[inline]
+  fn default() -> Self {
+    DocumentArgs {
+      ident: 0,
+      filename: None,
+      language: super::common::Language::Unspecified,
+      spans: None,
+      error_code: super::common::ErrorCode::NoError,
+    }
+  }
+}
+
+pub struct DocumentBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+  fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+  start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+}
+impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> DocumentBuilder<'a, 'b, A> {
+  #[inline]
+  pub fn add_ident(&mut self, ident: u16) {
+    self.fbb_.push_slot::<u16>(Document::VT_IDENT, ident, 0);
+  }
+  #[inline]
+  pub fn add_filename(&mut self, filename: flatbuffers::WIPOffset<&'b  str>) {
+    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(Document::VT_FILENAME, filename);
+  }
+  #[inline]
+  pub fn add_language(&mut self, language: super::common::Language) {
+    self.fbb_.push_slot::<super::common::Language>(Document::VT_LANGUAGE, language, super::common::Language::Unspecified);
+  }
+  #[inline]
+  pub fn add_spans(&mut self, spans: flatbuffers::WIPOffset<flatbuffers::Vector<'b , flatbuffers::ForwardsUOffset<Span<'b >>>>) {
+    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(Document::VT_SPANS, spans);
+  }
+  #[inline]
+  pub fn add_error_code(&mut self, error_code: super::common::ErrorCode) {
+    self.fbb_.push_slot::<super::common::ErrorCode>(Document::VT_ERROR_CODE, error_code, super::common::ErrorCode::NoError);
+  }
+  #[inline]
+  pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> DocumentBuilder<'a, 'b, A> {
+    let start = _fbb.start_table();
+    DocumentBuilder {
+      fbb_: _fbb,
+      start_: start,
+    }
+  }
+  #[inline]
+  pub fn finish(self) -> flatbuffers::WIPOffset<Document<'a>> {
+    let o = self.fbb_.end_table(self.start_);
+    flatbuffers::WIPOffset::new(o.value())
+  }
+}
+
+impl core::fmt::Debug for Document<'_> {
+  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    let mut ds = f.debug_struct("Document");
+      ds.field("ident", &self.ident());
+      ds.field("filename", &self.filename());
+      ds.field("language", &self.language());
+      ds.field("spans", &self.spans());
+      ds.field("error_code", &self.error_code());
+      ds.finish()
+  }
+}
+}  // pub mod spans
 }  // pub mod daylight
 

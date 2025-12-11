@@ -1,27 +1,24 @@
-use std::cell::RefCell;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use crate::daylight_generated::daylight::common::{self};
 use crate::daylight_generated::daylight::html;
+use crate::errors::{FatalError, NonFatalError};
 use crate::languages;
+use crate::processors::{HtmlProcessor, Processor, SpansProcessor};
+
 use axum::{
     body::Bytes,
     extract,
-    response::IntoResponse,
     routing::{get, post},
     Router,
 };
 use futures::stream::FuturesUnordered;
 use futures::{FutureExt, StreamExt};
-use http::{Request, StatusCode};
-use opentelemetry::trace;
-use thiserror::Error;
+use http::Request;
 use tokio::time::Duration;
 use tower_http::request_id::RequestId;
-use tracing::{Span, instrument};
-use tracing_opentelemetry::OpenTelemetrySpanExt;
-use tree_sitter_highlight as ts;
+use tracing::instrument;
 
 const MAX_REQUEST_SIZE: usize = 2 * 1024 * 1024 * 1024; // 2GB
 const MAX_FILE_SIZE: usize = 256 * 1024 * 1024; // 256MB
@@ -29,172 +26,14 @@ const MAX_FILE_SIZE: usize = 256 * 1024 * 1024; // 256MB
 /// Application state.
 #[derive(Clone)]
 pub struct Server {
-    default_per_file_timeout: Duration,
-    max_per_file_timeout: Duration,
-}
-
-/// State stored by highlighting tasks spawned with tokio::spawn_blocking.
-struct ThreadState;
-
-thread_local! {
-    // Has to be a RefCell because we need &muts for the tree-sitter
-    static HIGHLIGHTER: RefCell<ts::Highlighter> = RefCell::default();
-    static HTML_RENDERER: RefCell<ts::HtmlRenderer> = RefCell::default();
-    static RESPONSE_BUILDER: RefCell<flatbuffers::FlatBufferBuilder<'static>> = RefCell::default();
-}
-
-impl ThreadState {
-    #[instrument(skip(func))]
-    fn highlight_with_tree_sitter<T, F>(func: F) -> T
-    where
-        F: FnOnce(&mut ts::Highlighter) -> T,
-    {
-        HIGHLIGHTER.with_borrow_mut(func)
-    }
-
-    #[instrument(skip(func))]
-    fn render_with_tree_sitter<T, F>(func: F) -> T
-    where
-        F: FnOnce(&mut ts::HtmlRenderer) -> T,
-    {
-        HTML_RENDERER.with_borrow_mut(func)
-    }
-
-    #[instrument(skip(func))]
-    fn build_flatbuffers<T, F>(func: F) -> T
-    where
-        F: FnOnce(&mut flatbuffers::FlatBufferBuilder) -> T,
-    {
-        RESPONSE_BUILDER.with_borrow_mut(func)
-    }
-}
-
-/// Hard errors (those that fail with a non-200 HTTP error).
-#[derive(Debug, Error)]
-pub enum FatalError {
-    #[error("Decoding request failed")]
-    DecodeError(#[from] flatbuffers::InvalidFlatbuffer),
-    #[error("Timeout too large (max supported: {max}ms)", max = .0.as_millis())]
-    TimeoutTooLarge(Duration),
-}
-
-impl IntoResponse for FatalError {
-    fn into_response(self) -> axum::response::Response {
-        (StatusCode::BAD_REQUEST, self.to_string()).into_response()
-    }
-}
-
-/// Soft errors (those that might live alongside successful results).
-#[derive(Clone, Copy, Debug, Error)]
-pub enum NonFatalError {
-    #[error("Cancelled")]
-    Cancelled,
-    #[error("Empty file, nothing to do")]
-    EmptyFile,
-    #[error("File too large (limit: 256MB)")]
-    FileTooLarge,
-    #[error("Invalid or unknown language")]
-    InvalidLanguage,
-    #[error("Internal threading error")]
-    ThreadError,
-    #[error("Timed out")]
-    TimedOut,
-    #[error("Unknown error")]
-    UnknownError,
-}
-
-impl NonFatalError {
-    fn record_in_span(&self) {
-        tracing::Span::current().set_status(trace::Status::Error {
-            description: self.to_string().into(),
-        });
-    }
-}
-
-impl From<ts::Error> for NonFatalError {
-    fn from(value: ts::Error) -> Self {
-        match value {
-            ts::Error::Cancelled => Self::TimedOut,
-            ts::Error::InvalidLanguage => Self::InvalidLanguage,
-            ts::Error::Unknown => Self::UnknownError,
-        }
-    }
-}
-
-impl From<tokio::task::JoinError> for NonFatalError {
-    fn from(err: tokio::task::JoinError) -> Self {
-        if err.is_cancelled() {
-            Self::Cancelled
-        } else {
-            Self::UnknownError
-        }
-    }
-}
-
-impl Into<common::ErrorCode> for NonFatalError {
-    fn into(self) -> common::ErrorCode {
-        match self {
-            Self::TimedOut | Self::Cancelled => common::ErrorCode::TimedOut,
-            Self::ThreadError | Self::UnknownError => common::ErrorCode::UnknownError,
-            Self::InvalidLanguage => common::ErrorCode::UnknownLanguage,
-            Self::FileTooLarge => common::ErrorCode::FileTooLarge,
-            Self::EmptyFile => common::ErrorCode::NoError,
-        }
-    }
-}
-
-/// The result of an enqueued highlight task. Not a Result<> because my brain is too small
-/// to handle nested Result types in associated Future output times.
-pub enum HighlightOutput {
-    Success {
-        ident: u16,
-        // don't LOVE the Arc but lifetimes become quite difficult without them
-        filename: Arc<str>,
-        language: languages::SharedConfig,
-        lines: Vec<String>,
-    },
-    Failure {
-        ident: u16,
-        filename: Arc<str>,
-        language: Option<languages::SharedConfig>,
-        reason: NonFatalError,
-    },
-}
-
-impl HighlightOutput {
-    fn ident(&self) -> u16 {
-        match self {
-            Self::Success { ident, .. } => *ident,
-            Self::Failure { ident, .. } => *ident,
-        }
-    }
-
-    fn filename<'a>(&'a self) -> &'a str {
-        match self {
-            Self::Success { filename, .. } => filename.as_ref(),
-            Self::Failure { .. } => Default::default(),
-        }
-    }
-
-    fn language(&self) -> common::Language {
-        match self {
-            Self::Success { language, .. } => language.fb_language,
-            Self::Failure { language, .. } => language.map(|l| l.fb_language).unwrap_or_default(),
-        }
-    }
-
-    fn error_code(&self) -> common::ErrorCode {
-        match self {
-            Self::Success { .. } => common::ErrorCode::NoError,
-            Self::Failure { reason, .. } => (*reason).into(),
-        }
-    }
+    pub default_per_file_timeout: Duration,
+    pub max_per_file_timeout: Duration,
 }
 
 /// Try slicing out contents of a file from a request body, without making copies.
 #[instrument(skip(file, body, language))]
 fn prepare_file_contents(
-    file: &html::File<'_>,
+    file: &common::File<'_>,
     body: Bytes,
     filename: Arc<str>,
     // Sent by reference to avoid writing Result<(Bytes, Language), (NonFatalError, Language)>.
@@ -220,74 +59,9 @@ fn prepare_file_contents(
     Ok(contents)
 }
 
-fn callback(highlight: ts::Highlight, output: &mut Vec<u8>) {
-    let kind = languages::ALL_HIGHLIGHT_NAMES[highlight.0];
-    output.extend_from_slice(b"class=\"");
-    output.extend_from_slice(kind.as_bytes());
-    output.extend_from_slice(b"\"");
-}
-
-#[instrument(skip(language, contents, cancellation_flag))]
-fn highlight(
-    ident: u16,
-    filename: Arc<str>,
-    language: Option<languages::SharedConfig>,
-    contents: bytes::Bytes,
-    include_injections: bool,
-    cancellation_flag: Arc<AtomicUsize>,
-) -> HighlightOutput {
-    let Some(language) = language else {
-        return HighlightOutput::Failure {
-            ident,
-            filename,
-            language: None,
-            reason: NonFatalError::InvalidLanguage,
-        };
-    };
-
-    let result = ThreadState::highlight_with_tree_sitter(|highlighter| {
-        let iter =
-            highlighter.highlight(
-                &language.ts_config,
-                &contents,
-                Some(&cancellation_flag),
-                |s| {
-                    if include_injections {
-                        languages::from_name(s).map(|l| &l.ts_config)
-                    } else {
-                        None
-                    }
-                },
-            )?;
-        // Has to be nested in this ThreadState:: call or `iter` doesn't live long enough.
-        ThreadState::render_with_tree_sitter(|renderer| {
-            renderer.reset();
-            renderer.render(iter, &contents, &callback)?;
-            Ok(renderer.lines().map(String::from).collect())
-        })
-    }).map_err(|e: ts::Error| NonFatalError::from(e));
-
-    match result {
-        Ok(lines) => HighlightOutput::Success {
-            ident,
-            filename,
-            language,
-            lines,
-        },
-        Err(err) => {
-            err.record_in_span();
-            HighlightOutput::Failure {
-                ident,
-                filename,
-                language: Some(language),
-                reason: err,
-            }
-        }
-    }
-}
-
+/// Generic handler that processes files using a specific Processor implementation.
 #[instrument(skip(state, body), fields(num_files, timeout_ms, request_size = body.len()))]
-pub async fn html_handler(
+pub async fn generic_handler<P: Processor>(
     extract::State(state): extract::State<Server>,
     body: Bytes,
 ) -> Result<axum::response::Response, FatalError> {
@@ -304,10 +78,10 @@ pub async fn html_handler(
     }
     let timeout_flag: Arc<AtomicUsize> = Arc::default();
     let files = request.files().unwrap_or_default();
-    Span::current().record("num_files", files.len());
-    Span::current().record("timeout_ms", timeout_ms);
+    tracing::Span::current().record("num_files", files.len());
+    tracing::Span::current().record("timeout_ms", timeout_ms);
     if files.is_empty() {
-        return build_response(vec![]);
+        return P::build_response(vec![]);
     }
 
     // This is the heart of the app: efficiently enqueuing concurrent highlighting requests,
@@ -323,14 +97,27 @@ pub async fn html_handler(
             let include_injections = file.include_injections();
 
             async move {
-                let mut language: Option<languages::SharedConfig> = None;
+                let mut language_ptr: Option<languages::SharedConfig> = None;
                 let contents =
-                    match prepare_file_contents(&file, body, filename.clone(), &mut language) {
+                    match prepare_file_contents(&file, body, filename.clone(), &mut language_ptr) {
                         Ok(ok) => ok,
                         Err(reason) => {
-                            return HighlightOutput::Failure { ident, filename, language, reason };
+                            return crate::processors::Outcome::Failure {
+                                ident,
+                                filename,
+                                language: language_ptr,
+                                reason,
+                            };
                         }
                     };
+                let Some(language) = language_ptr else {
+                    return crate::processors::Outcome::Failure {
+                        ident,
+                        filename,
+                        language: None,
+                        reason: NonFatalError::InvalidLanguage,
+                    };
+                };
 
                 // Clones are needed for error handling paths (but are cheap, because these are Arcs).
                 let cancellation_flag = timeout_flag.clone();
@@ -340,7 +127,7 @@ pub async fn html_handler(
 
                 // Spawn a blocking task for highlighting this file
                 let task = tokio::task::spawn_blocking(move || {
-                    highlight(
+                    P::process(
                         ident,
                         filename,
                         language,
@@ -354,10 +141,10 @@ pub async fn html_handler(
                     t.map_err(NonFatalError::from).unwrap_or_else(|reason| {
                         tracing::warn!("Join error encountered, this is upsetting: {reason}");
                         reason.record_in_span();
-                        HighlightOutput::Failure {
+                        crate::processors::Outcome::Failure {
                             ident,
                             filename: filename_for_join_error,
-                            language,
+                            language: Some(language),
                             reason,
                         }
                     })
@@ -370,10 +157,10 @@ pub async fn html_handler(
                         // Timeout occurred - set the cancellation flag so inflight tree-sitter-side tasks
                         // know that they should cancel and return.
                         cancellation_flag_for_timeout.store(1, Ordering::SeqCst);
-                        HighlightOutput::Failure {
+                        crate::processors::Outcome::Failure {
                             ident,
                             filename: filename_for_timeout,
-                            language,
+                            language: language_ptr,
                             reason: NonFatalError::TimedOut,
                         }
                     })
@@ -381,51 +168,7 @@ pub async fn html_handler(
         })
         .collect::<FuturesUnordered<_>>();
     // Wait on all in-flight tasks simultaneously with .collect() and build a response.
-    build_response(tasks.collect().await)
-}
-
-// No #[instrument] here; build_flatbuffers takes care of that
-fn build_response(
-    outputs: Vec<HighlightOutput>,
-) -> Result<axum::response::Response, FatalError> {
-    ThreadState::build_flatbuffers(|mut builder| {
-        builder.reset();
-        let documents = outputs
-            .into_iter()
-            .map(|doc| {
-                let filename = builder.create_string(doc.filename());
-                let lines = match doc {
-                    HighlightOutput::Success { ref lines, .. } => {
-                        let line_offsets: Vec<_> = lines
-                            .into_iter()
-                            .map(|line| builder.create_string(line))
-                            .collect();
-                        Some(builder.create_vector(&line_offsets))
-                    }
-                    _ => None,
-                };
-                html::Document::create(
-                    &mut builder,
-                    &html::DocumentArgs {
-                        ident: doc.ident(),
-                        filename: Some(filename),
-                        language: doc.language(),
-                        lines,
-                        error_code: doc.error_code(),
-                    },
-                )
-            })
-            .collect::<Vec<_>>();
-        let documents = Some(builder.create_vector(&documents));
-        let response = html::Response::create(&mut builder, &html::ResponseArgs { documents });
-        builder.finish(response, None);
-        let response_bytes = builder.finished_data();
-        Ok((StatusCode::OK, Bytes::copy_from_slice(response_bytes)).into_response())
-    })
-}
-
-async fn health_handler() -> &'static str {
-    "ok"
+    P::build_response(tasks.collect().await)
 }
 
 async fn shutdown_signal() {
@@ -488,8 +231,9 @@ pub fn router(default_per_file_timeout: Duration, max_per_file_timeout: Duration
         .layer(extract::DefaultBodyLimit::max(MAX_REQUEST_SIZE));
 
     Router::new()
-        .route("/v1/html", post(html_handler))
-        .route("/health", get(health_handler))
+        .route("/v1/html", post(generic_handler::<HtmlProcessor>))
+        .route("/v1/spans", post(generic_handler::<SpansProcessor>))
+        .route("/health", get("ok"))
         .layer(layer)
         .with_state(state)
 }

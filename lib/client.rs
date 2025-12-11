@@ -6,6 +6,7 @@ use bytes::Bytes;
 use flatbuffers::{FlatBufferBuilder, InvalidFlatbuffer};
 use thiserror::Error;
 
+pub use crate::daylight_generated::daylight::common;
 pub use crate::daylight_generated::daylight::html;
 pub use crate::languages::SharedConfig;
 
@@ -13,7 +14,7 @@ pub struct Client<'a> {
     url: String,
     http: reqwest::Client,
     builder: FlatBufferBuilder<'a>,
-    files: Vec<flatbuffers::WIPOffset<html::File<'a>>>,
+    files: Vec<flatbuffers::WIPOffset<common::File<'a>>>,
 }
 
 #[derive(Debug, Error)]
@@ -44,7 +45,7 @@ impl<'a> Client<'a> {
         language: SharedConfig,
         include_injections: bool,
     ) {
-        let file = html::FileArgs {
+        let file = common::FileArgs {
             ident,
             filename: filename.map(|f| self.builder.create_string(f)),
             contents: Some(self.builder.create_vector(contents)),
@@ -52,7 +53,7 @@ impl<'a> Client<'a> {
             language: language.fb_language,
             include_injections,
         };
-        self.files.push(html::File::create(&mut self.builder, &file))
+        self.files.push(common::File::create(&mut self.builder, &file))
     }
 
     pub async fn html(&mut self, timeout: Duration) -> Result<Bytes, Error> {
