@@ -31,13 +31,6 @@ impl Processor for HtmlProcessor {
         include_injections: bool,
         cancellation_flag: Arc<AtomicUsize>,
     ) -> Outcome<String> {
-        fn callback(highlight: ts::Highlight, output: &mut Vec<u8>) {
-            let kind = languages::ALL_HIGHLIGHT_NAMES[highlight.0];
-            output.extend_from_slice(b"class=\"");
-            output.extend_from_slice(kind.as_bytes());
-            output.extend_from_slice(b"\"");
-        }
-
         let result = ThreadState::with_highlighter(|highlighter| {
             let iter = {
                 let _span = tracing::trace_span!("highlight_with_tree_sitter").entered();
@@ -57,7 +50,12 @@ impl Processor for HtmlProcessor {
 
             ThreadState::render_with_tree_sitter(|renderer| {
                 renderer.reset();
-                renderer.render(iter, &contents, &callback)?;
+                renderer.render(iter, &contents, &|highlight, output| {
+                    let kind = languages::ALL_HIGHLIGHT_NAMES[highlight.0];
+                    output.extend_from_slice(b"class=\"");
+                    output.extend_from_slice(kind.as_bytes());
+                    output.extend_from_slice(b"\"");
+                })?;
                 Ok(renderer.lines().map(String::from).collect())
             })
         })
