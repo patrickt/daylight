@@ -30,7 +30,6 @@ impl Processor for SpansProcessor {
     ) -> Outcome<(usize, usize, usize)> {
         ThreadState::highlight_with_tree_sitter(|highlighter| {
             let iter_res = {
-                let _span = tracing::trace_span!("highlight_with_tree_sitter").entered();
                 highlighter.highlight(
                     &language.ts_config,
                     &contents,

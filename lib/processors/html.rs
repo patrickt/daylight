@@ -33,7 +33,6 @@ impl Processor for HtmlProcessor {
     ) -> Outcome<String> {
         let result = ThreadState::highlight_with_tree_sitter(|highlighter| {
             let iter = {
-                let _span = tracing::trace_span!("highlight_with_tree_sitter").entered();
                 highlighter.highlight(
                     &language.ts_config,
                     &contents,
