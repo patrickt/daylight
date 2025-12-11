@@ -34,27 +34,34 @@ pub struct Server {
 }
 
 /// State stored by highlighting tasks spawned with tokio::spawn_blocking.
-#[derive(Default)]
-struct ThreadState {
-    highlighter: ts::Highlighter,
-    renderer: ts::HtmlRenderer,
-}
+struct ThreadState;
 
 thread_local! {
     // Has to be a RefCell because we need &muts for the tree-sitter
-    static HIGHLIGHTER_STATE: RefCell<ThreadState> = RefCell::default();
+    static HIGHLIGHTER: RefCell<ts::Highlighter> = RefCell::default();
+    static HTML_RENDERER: RefCell<ts::HtmlRenderer> = RefCell::default();
     static RESPONSE_BUILDER: RefCell<flatbuffers::FlatBufferBuilder<'static>> = RefCell::default();
 }
 
 impl ThreadState {
-    fn for_highlighting<T, F>(func: F) -> T
+    #[instrument(skip(func))]
+    fn highlight_with_tree_sitter<T, F>(func: F) -> T
     where
-        F: FnOnce(&mut ThreadState) -> T,
+        F: FnOnce(&mut ts::Highlighter) -> T,
     {
-        HIGHLIGHTER_STATE.with_borrow_mut(func)
+        HIGHLIGHTER.with_borrow_mut(func)
     }
 
-    fn for_building<T, F>(func: F) -> T
+    #[instrument(skip(func))]
+    fn render_with_tree_sitter<T, F>(func: F) -> T
+    where
+        F: FnOnce(&mut ts::HtmlRenderer) -> T,
+    {
+        HTML_RENDERER.with_borrow_mut(func)
+    }
+
+    #[instrument(skip(func))]
+    fn build_flatbuffers<T, F>(func: F) -> T
     where
         F: FnOnce(&mut flatbuffers::FlatBufferBuilder) -> T,
     {
@@ -78,15 +85,30 @@ impl IntoResponse for FatalError {
 }
 
 /// Soft errors (those that might live alongside successful results).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Error)]
 pub enum NonFatalError {
+    #[error("Cancelled")]
     Cancelled,
+    #[error("Empty file, nothing to do")]
     EmptyFile,
+    #[error("File too large (limit: 256MB)")]
     FileTooLarge,
+    #[error("Invalid or unknown language")]
     InvalidLanguage,
+    #[error("Internal threading error")]
     ThreadError,
+    #[error("Timed out")]
     TimedOut,
+    #[error("Unknown error")]
     UnknownError,
+}
+
+impl NonFatalError {
+    fn record_in_span(&self) {
+        tracing::Span::current().set_status(trace::Status::Error {
+            description: self.to_string().into(),
+        });
+    }
 }
 
 impl From<ts::Error> for NonFatalError {
@@ -223,10 +245,9 @@ fn highlight(
         };
     };
 
-    let result: Result<_, ts::Error> = ThreadState::for_highlighting(|pt| {
-        let iter = {
-            let _span = tracing::trace_span!("highlight_with_tree_sitter").entered();
-            pt.highlighter.highlight(
+    let result = ThreadState::highlight_with_tree_sitter(|highlighter| {
+        let iter =
+            highlighter.highlight(
                 &language.ts_config,
                 &contents,
                 Some(&cancellation_flag),
@@ -237,14 +258,14 @@ fn highlight(
                         None
                     }
                 },
-            )
-        }?;
-
-        let _span = tracing::trace_span!("render_html").entered();
-        pt.renderer.reset();
-        pt.renderer.render(iter, &contents, &callback)?;
-        Ok(pt.renderer.lines().map(String::from).collect())
-    });
+            )?;
+        // Has to be nested in this ThreadState:: call or `iter` doesn't live long enough.
+        ThreadState::render_with_tree_sitter(|renderer| {
+            renderer.reset();
+            renderer.render(iter, &contents, &callback)?;
+            Ok(renderer.lines().map(String::from).collect())
+        })
+    }).map_err(|e: ts::Error| NonFatalError::from(e));
 
     match result {
         Ok(lines) => HighlightOutput::Success {
@@ -254,14 +275,12 @@ fn highlight(
             lines,
         },
         Err(err) => {
-            Span::current().set_status(trace::Status::Error {
-                description: err.to_string().into(),
-            });
+            err.record_in_span();
             HighlightOutput::Failure {
                 ident,
                 filename,
                 language: Some(language),
-                reason: NonFatalError::from(err),
+                reason: err,
             }
         }
     }
@@ -272,8 +291,8 @@ pub async fn html_handler(
     extract::State(state): extract::State<Server>,
     body: Bytes,
 ) -> Result<axum::response::Response, FatalError> {
+    // Prepare this request.
     let request = flatbuffers::root::<html::Request>(&body)?;
-
     let timeout_ms = request.timeout_ms();
     let timeout = if timeout_ms == 0 {
         state.default_per_file_timeout
@@ -284,11 +303,9 @@ pub async fn html_handler(
         Err(FatalError::TimeoutTooLarge(state.max_per_file_timeout))?
     }
     let timeout_flag: Arc<AtomicUsize> = Arc::default();
-
     let files = request.files().unwrap_or_default();
     Span::current().record("num_files", files.len());
     Span::current().record("timeout_ms", timeout_ms);
-
     if files.is_empty() {
         return build_response(vec![]);
     }
@@ -334,16 +351,14 @@ pub async fn html_handler(
                 })
                 .map(move |t| {
                     // Thread-join errors are unlikely but possible
-                    t.unwrap_or_else(|err| {
-                        tracing::warn!("Join error encountered, this is upsetting: {err}");
-                        Span::current().set_status(trace::Status::Error {
-                            description: "threading error".into(),
-                        });
+                    t.map_err(NonFatalError::from).unwrap_or_else(|reason| {
+                        tracing::warn!("Join error encountered, this is upsetting: {reason}");
+                        reason.record_in_span();
                         HighlightOutput::Failure {
                             ident,
                             filename: filename_for_join_error,
                             language,
-                            reason: err.into(),
+                            reason,
                         }
                     })
                 });
@@ -369,11 +384,11 @@ pub async fn html_handler(
     build_response(tasks.collect().await)
 }
 
-#[instrument(skip(outputs), fields(count = outputs.len()))]
+// No #[instrument] here; build_flatbuffers takes care of that
 fn build_response(
     outputs: Vec<HighlightOutput>,
 ) -> Result<axum::response::Response, FatalError> {
-    ThreadState::for_building(|mut builder| {
+    ThreadState::build_flatbuffers(|mut builder| {
         builder.reset();
         let documents = outputs
             .into_iter()
@@ -431,7 +446,7 @@ async fn shutdown_signal() {
     }
 }
 
-/// Public interface
+// Public interface follows.
 
 /// Build a router for a Daylight application.
 pub fn router(default_per_file_timeout: Duration, max_per_file_timeout: Duration) -> Router {
