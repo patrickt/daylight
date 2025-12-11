@@ -4,9 +4,7 @@ use std::sync::atomic::AtomicUsize;
 use axum::body::Bytes;
 use axum::response::IntoResponse;
 use http::StatusCode;
-use opentelemetry::trace;
-use tracing::{Span, instrument};
-use tracing_opentelemetry::OpenTelemetrySpanExt;
+use tracing::instrument;
 use tree_sitter_highlight as ts;
 
 use crate::daylight_generated::daylight::html;
@@ -68,15 +66,7 @@ impl Processor for HtmlProcessor {
                 contents: lines,
             },
             Err(err) => {
-                Span::current().set_status(trace::Status::Error {
-                    description: err.to_string().into(),
-                });
-                Outcome::Failure {
-                    ident,
-                    filename,
-                    language: Some(language),
-                    reason: NonFatalError::from(err),
-                }
+                Outcome::failure(ident, filename, Some(language), NonFatalError::from(err))
             }
         }
     }

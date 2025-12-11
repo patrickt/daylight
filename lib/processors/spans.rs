@@ -47,12 +47,7 @@ impl Processor for SpansProcessor {
             let iter = match iter_res {
                 Ok(iter) => iter,
                 Err(e) => {
-                    return Outcome::Failure {
-                        ident,
-                        filename,
-                        language: None,
-                        reason: e.into(),
-                    };
+                    return Outcome::failure(ident, filename, None, e.into());
                 }
             };
 

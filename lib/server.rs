@@ -31,7 +31,7 @@ pub struct Server {
 }
 
 /// Try slicing out contents of a file from a request body, without making copies.
-#[instrument(skip(file, body, language))]
+#[instrument(err, skip(file, body, language))]
 fn prepare_file_contents(
     file: &common::File<'_>,
     body: Bytes,
@@ -60,7 +60,7 @@ fn prepare_file_contents(
 }
 
 /// Generic handler that processes files using a specific Processor implementation.
-#[instrument(skip(state, body), fields(num_files, timeout_ms, request_size = body.len()))]
+#[instrument(err, skip(state, body), fields(num_files, timeout_ms, request_size = body.len()))]
 pub async fn generic_handler<P: Processor>(
     extract::State(state): extract::State<Server>,
     body: Bytes,
@@ -102,21 +102,11 @@ pub async fn generic_handler<P: Processor>(
                     match prepare_file_contents(&file, body, filename.clone(), &mut language_ptr) {
                         Ok(ok) => ok,
                         Err(reason) => {
-                            return crate::processors::Outcome::Failure {
-                                ident,
-                                filename,
-                                language: language_ptr,
-                                reason,
-                            };
+                            return crate::processors::Outcome::failure(ident, filename, language_ptr, reason);
                         }
                     };
                 let Some(language) = language_ptr else {
-                    return crate::processors::Outcome::Failure {
-                        ident,
-                        filename,
-                        language: None,
-                        reason: NonFatalError::InvalidLanguage,
-                    };
+                    return crate::processors::Outcome::failure(ident, filename, None, NonFatalError::InvalidLanguage);
                 };
 
                 // Clones are needed for error handling paths (but are cheap, because these are Arcs).
@@ -140,13 +130,7 @@ pub async fn generic_handler<P: Processor>(
                     // Thread-join errors are unlikely but possible
                     t.map_err(NonFatalError::from).unwrap_or_else(|reason| {
                         tracing::warn!("Join error encountered, this is upsetting: {reason}");
-                        reason.record_in_span();
-                        crate::processors::Outcome::Failure {
-                            ident,
-                            filename: filename_for_join_error,
-                            language: Some(language),
-                            reason,
-                        }
+                        crate::processors::Outcome::failure(ident, filename_for_join_error, Some(language), reason)
                     })
                 });
 
@@ -157,12 +141,7 @@ pub async fn generic_handler<P: Processor>(
                         // Timeout occurred - set the cancellation flag so inflight tree-sitter-side tasks
                         // know that they should cancel and return.
                         cancellation_flag_for_timeout.store(1, Ordering::SeqCst);
-                        crate::processors::Outcome::Failure {
-                            ident,
-                            filename: filename_for_timeout,
-                            language: language_ptr,
-                            reason: NonFatalError::TimedOut,
-                        }
+                        crate::processors::Outcome::failure(ident, filename_for_timeout, language_ptr, NonFatalError::TimedOut)
                     })
             }
         })

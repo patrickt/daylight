@@ -2,14 +2,16 @@ mod html;
 mod spans;
 
 pub use html::HtmlProcessor;
+use opentelemetry::trace::Status;
 pub use spans::SpansProcessor;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 
 use axum::body::Bytes;
 
-use crate::errors::FatalError;
+use crate::errors::{FatalError, NonFatalError};
 use crate::languages;
 use crate::daylight_generated::daylight::common;
 
@@ -27,11 +29,18 @@ pub enum Outcome<T> {
         ident: u16,
         filename: Arc<str>,
         language: Option<languages::SharedConfig>,
-        reason: crate::errors::NonFatalError,
+        reason: NonFatalError,
     },
 }
 
 impl<T> Outcome<T> {
+    pub fn failure(ident: u16, filename: Arc<str>, language: Option<languages::SharedConfig>, reason: NonFatalError) -> Self {
+        tracing::Span::current().set_status(Status::Error {
+            description: reason.to_string().into(),
+        });
+        Self::Failure { ident, filename, language, reason }
+    }
+
     pub fn ident(&self) -> u16 {
         match self {
             Self::Success { ident, .. } => *ident,

@@ -11,7 +11,7 @@ use crate::daylight_generated::daylight::common;
 /// Hard errors (those that fail with a non-200 HTTP error).
 #[derive(Debug, Error)]
 pub enum FatalError {
-    #[error("Decoding request failed")]
+    #[error(transparent)]
     DecodeError(#[from] flatbuffers::InvalidFlatbuffer),
     #[error("Timeout too large (max supported: {max}ms)", max = .0.as_millis())]
     TimeoutTooLarge(Duration),
