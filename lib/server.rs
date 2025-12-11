@@ -19,7 +19,7 @@ use opentelemetry::trace;
 use thiserror::Error;
 use tokio::time::Duration;
 use tower_http::request_id::RequestId;
-use tracing::instrument;
+use tracing::{Span, instrument};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use tree_sitter_highlight as ts;
 
@@ -254,7 +254,7 @@ fn highlight(
             lines,
         },
         Err(err) => {
-            tracing::Span::current().set_status(trace::Status::Error {
+            Span::current().set_status(trace::Status::Error {
                 description: err.to_string().into(),
             });
             HighlightOutput::Failure {
@@ -286,8 +286,8 @@ pub async fn html_handler(
     let timeout_flag: Arc<AtomicUsize> = Arc::default();
 
     let files = request.files().unwrap_or_default();
-    tracing::Span::current().record("num_files", files.len());
-    tracing::Span::current().record("timeout_ms", timeout_ms);
+    Span::current().record("num_files", files.len());
+    Span::current().record("timeout_ms", timeout_ms);
 
     if files.is_empty() {
         return build_response(vec![]);
@@ -296,9 +296,7 @@ pub async fn html_handler(
     // This is the heart of the app: efficiently enqueuing concurrent highlighting requests,
     // propagating cancellation signals, and returning them in a stream, without
     // starving the tokio event loop and while processing as many documents as possible.
-    // Though this is technically a streaming problem, FuturesUnordered seems to provide
-    // drastically better performance than writing this with futures::stream::iter().
-    let tasks: FuturesUnordered<_> = files
+    let tasks = files
         .iter()
         .map(|file| {
             let ident = file.ident();
@@ -338,7 +336,7 @@ pub async fn html_handler(
                     // Thread-join errors are unlikely but possible
                     t.unwrap_or_else(|err| {
                         tracing::warn!("Join error encountered, this is upsetting: {err}");
-                        tracing::Span::current().set_status(trace::Status::Error {
+                        Span::current().set_status(trace::Status::Error {
                             description: "threading error".into(),
                         });
                         HighlightOutput::Failure {
@@ -366,18 +364,18 @@ pub async fn html_handler(
                     })
             }
         })
-        .collect();
+        .collect::<FuturesUnordered<_>>();
     // Wait on all in-flight tasks simultaneously with .collect() and build a response.
     build_response(tasks.collect().await)
 }
 
-#[instrument(skip(doc_results), fields(count = doc_results.len()))]
+#[instrument(skip(outputs), fields(count = outputs.len()))]
 fn build_response(
-    doc_results: Vec<HighlightOutput>,
+    outputs: Vec<HighlightOutput>,
 ) -> Result<axum::response::Response, FatalError> {
     ThreadState::for_building(|mut builder| {
         builder.reset();
-        let documents: Vec<_> = doc_results
+        let documents = outputs
             .into_iter()
             .map(|doc| {
                 let filename = builder.create_string(doc.filename());
@@ -402,7 +400,7 @@ fn build_response(
                     },
                 )
             })
-            .collect();
+            .collect::<Vec<_>>();
         let documents = Some(builder.create_vector(&documents));
         let response = html::Response::create(&mut builder, &html::ResponseArgs { documents });
         builder.finish(response, None);
@@ -441,10 +439,10 @@ pub fn router(default_per_file_timeout: Duration, max_per_file_timeout: Duration
         default_per_file_timeout,
         max_per_file_timeout,
     };
-    use axum_tracing_opentelemetry::middleware;
+    // use axum_tracing_opentelemetry::middleware;
     use tower_http::*;
 
-    let counter = tower_http::metrics::in_flight_requests::InFlightRequestsCounter::new();
+    let counter = metrics::in_flight_requests::InFlightRequestsCounter::new();
     let layer = tower::ServiceBuilder::new()
         .layer(catch_panic::CatchPanicLayer::new())
         .layer(compression::CompressionLayer::new()) // Request ID must come before tracing to be available in spans
@@ -470,8 +468,8 @@ pub fn router(default_per_file_timeout: Duration, max_per_file_timeout: Duration
             }),
         )
         .layer(metrics::InFlightRequestsLayer::new(counter))
-        .layer(middleware::OtelInResponseLayer::default())
-        .layer(middleware::OtelAxumLayer::default())
+        // .layer(middleware::OtelInResponseLayer::default())
+        // .layer(middleware::OtelAxumLayer::default())
         .layer(extract::DefaultBodyLimit::max(MAX_REQUEST_SIZE));
 
     Router::new()
