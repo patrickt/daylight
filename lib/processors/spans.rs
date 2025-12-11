@@ -28,7 +28,7 @@ impl Processor for SpansProcessor {
         include_injections: bool,
         cancellation_flag: Arc<AtomicUsize>,
     ) -> Outcome<(usize, usize, usize)> {
-        ThreadState::with_highlighter(|highlighter| {
+        ThreadState::highlight_with_tree_sitter(|highlighter| {
             let iter_res = {
                 let _span = tracing::trace_span!("highlight_with_tree_sitter").entered();
                 highlighter.highlight(

@@ -14,7 +14,7 @@ pub struct ThreadState;
 
 impl ThreadState {
     #[instrument(skip(func))]
-    pub fn with_highlighter<T, F>(func: F) -> T
+    pub fn highlight_with_tree_sitter<T, F>(func: F) -> T
     where
         F: FnOnce(&mut ts::Highlighter) -> T,
     {

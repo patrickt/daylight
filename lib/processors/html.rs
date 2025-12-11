@@ -31,7 +31,7 @@ impl Processor for HtmlProcessor {
         include_injections: bool,
         cancellation_flag: Arc<AtomicUsize>,
     ) -> Outcome<String> {
-        let result = ThreadState::with_highlighter(|highlighter| {
+        let result = ThreadState::highlight_with_tree_sitter(|highlighter| {
             let iter = {
                 let _span = tracing::trace_span!("highlight_with_tree_sitter").entered();
                 highlighter.highlight(
