@@ -9,7 +9,9 @@ thread_local! {
     static RESPONSE_BUILDER: RefCell<flatbuffers::FlatBufferBuilder<'static>> = RefCell::default();
 }
 
-/// State stored by highlighting tasks spawned with tokio::spawn_blocking.
+/// Interface for thread-local variables. Because Tokio keeps a pool of worker threads
+/// around both for request handling and work in spawn_blocking, we get a lot of speed
+/// by not creating these structures anew every time.
 pub struct ThreadState;
 
 impl ThreadState {
