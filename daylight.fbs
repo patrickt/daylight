@@ -60,8 +60,7 @@ table Request {
   timeout_ms: uint64;
 }
 
-/// A response containing either highlighted documents or failures.
-/// Both documents and failures can appear in any order, regardless of how they were ordered in the request.
+/// A response containing highlighted documents.
 table Response {
   documents: [Document];
 }
@@ -74,7 +73,7 @@ table Document {
   filename: string;
   /// The language that was used or inferred for this file.
   language: daylight.common.Language;
-  /// Lines of HTML. If `error_code` is not NoError, this will be empty.
+  /// Lines of HTML. If this operation errored, this may be empty, but this is not guaranteed.
   lines: [string];
   /// If no error occurred, the code will be NoError. Natch.
   error_code: daylight.common.ErrorCode;
@@ -82,26 +81,47 @@ table Document {
 
 namespace daylight.spans;
 
+/// A request to highlight documents returning only byte spans and the class
+/// of the captured highlighting group.
 table Request {
   files: [daylight.common.File];
   timeout_ms: uint64;
 }
 
+/// A response containing highlighted documents and capture name information.
 table Response {
+  /// The list of configured highlight captures to which this response's
+  /// documents refer. The right for the members of this list to change
+  /// is explicitly reserved.
   highlight_names: [string];
+  /// The documents that were highlighted.
   documents: [Document];
 }
 
+/// Range and highlight-capture information about a particular identifier.
 table Span {
+  /// An offset into the `highlight_names` array in the Response in which
+  /// this span is present.
   index: uint16;
+  /// The start of this highlight, as an offset into its UTF-8 source.
   start: uint64;
+  /// The end of this highlight, as an offset into its UTF-8 source.
   end: uint64;
 }
 
+/// A document for span-based highlighting.
 table Document {
+  /// A unique numeric identifier used to correlate files in a request with files in a response.
+  /// Often this will be an array index. If two files are passed with the same ident, the behavior
+  /// is undefined. Invariant: for each file in a request, there will be either a Document or a Failure
+  /// with that ident.
   ident: uint16;
+  /// An optional filename for this file.
   filename: string;
+  /// The language used to parse and highlight this file.
   language: daylight.common.Language;
+  /// The occurrences of highlighting within the passed document.
   spans: [Span];
+  /// The error associated with this document,
   error_code: daylight.common.ErrorCode;
 }
